@@ -222,6 +222,36 @@ local function nearestInteractable(agent, interactables, predicate)
     return best
 end
 
+local function findBestLegalWorkTile(agent, target, grid, cols, rows, reservations)
+    if not target then return nil end
+
+    local tiles = {}
+    if target.getWorkTiles then
+        tiles = target:getWorkTiles()
+    elseif target.x and target.y then
+        tiles = { { x = target.x, y = target.y } }
+    end
+
+    local best = nil
+    local bestScore = math.huge
+
+    for _, tile in ipairs(tiles) do
+        if tile and tile.x and tile.y and (tile.x ~= target.x or tile.y ~= target.y) then
+            local key = cellKey(tile.x, tile.y)
+            if isWalkable(grid, cols, rows, tile.x, tile.y) and not reservations[key] then
+                local score = manhattan(agent.x, agent.y, tile.x, tile.y)
+                score = score + manhattan(tile.x, tile.y, target.x, target.y) * 0.25
+                if score < bestScore then
+                    bestScore = score
+                    best = tile
+                end
+            end
+        end
+    end
+
+    return best
+end
+
 local function hasValidTask(task)
     return task ~= nil and task.target ~= nil and task.target.enabled ~= false
 end
@@ -273,23 +303,26 @@ function Agent:chooseTask(interactables)
         return node.kind == "mine" and node:canInteract(self) and (node.resourceLeft == nil or node.resourceLeft > 0) and not node.claimedBy
     end
 
-    local function storageReady(node)
-        return node.kind == "storage" and node:canInteract(self) and (node.capacity == nil or (node.amount or 0) < node.capacity)
+    local function dropOffReady(node)
+        return (node.kind == "box" or node.kind == "storage") and node:canInteract(self) and (node.capacity == nil or (node.amount or 0) < node.capacity) and not node.claimedBy
     end
 
     if self.role == "miner" then
         if self.resourceHeld then
-            local storage = nearestInteractable(self, interactables, storageReady)
-            if storage then
-                self:setTask({ type = "deliver", label = "Delivering", target = storage, kind = "storage" })
-                return self.currentTask
+            local box = nearestInteractable(self, interactables, dropOffReady)
+            if box then
+                if box:claim(self) then
+                    self:setTask({ type = "deliver", label = "Delivering", target = box, kind = box.kind })
+                    return self.currentTask
+                end
             end
         else
             local mine = nearestInteractable(self, interactables, mineReady)
             if mine then
-                mine:claim(self)
-                self:setTask({ type = "mine", label = "Mining", target = mine, kind = "mine" })
-                return self.currentTask
+                if mine:claim(self) then
+                    self:setTask({ type = "mine", label = "Mining", target = mine, kind = "mine" })
+                    return self.currentTask
+                end
             end
         end
     end
@@ -325,45 +358,75 @@ function Agent:update(dt, cols, rows, grid, interactables, allAgents)
     end
 
     if self.x == target.x and self.y == target.y then
-        self.statusText = self.currentTask.label
-        self.harvestTimer = self.harvestTimer + dt
+        self.statusText = "Blocked"
+        self.currentTask = nil
+        self.targetNode = nil
+        self.path = nil
+        self._reservedCell = { x = self.x, y = self.y }
+        return
+    end
 
-        if self.currentTask.type == "mine" then
-            if target:work(self, dt) then
-                self.resourceHeld = true
-                self.statusText = "Holding resource"
-                target:release()
-                self.currentTask = nil
-                self.targetNode = nil
-                self.path = nil
-                self.harvestTimer = 0
+    local reservations = buildReservationMap(allAgents, self)
+    local workTile = nil
+    if target and target.getWorkTiles and target:isLegalWorkPosition(self.x, self.y) then
+        workTile = { x = self.x, y = self.y }
+    else
+        workTile = findBestLegalWorkTile(self, target, grid, cols, rows, reservations)
+    end
+
+    if not workTile then
+        self.statusText = "Blocked"
+        self.currentTask = nil
+        self.targetNode = nil
+        self.path = nil
+        self._reservedCell = { x = self.x, y = self.y }
+        return
+    end
+
+    if target:isLegalWorkPosition(workTile.x, workTile.y) then
+        if self.x == workTile.x and self.y == workTile.y then
+            self.statusText = self.currentTask.label
+            self.harvestTimer = self.harvestTimer + dt
+
+            if self.currentTask.type == "mine" then
+                if target:work(self, dt) then
+                    self.resourceHeld = true
+                    self.statusText = "Holding resource"
+                    target:release()
+                    self.currentTask = nil
+                    self.targetNode = nil
+                    self.path = nil
+                    self.harvestTimer = 0
+                    self._reservedCell = { x = self.x, y = self.y }
+                    return
+                end
                 self._reservedCell = { x = self.x, y = self.y }
                 return
             end
-            self._reservedCell = { x = self.x, y = self.y }
-            return
-        end
 
-        if self.currentTask.type == "deliver" then
-            if target:work(self, dt) then
-                self.resourceHeld = false
-                self.statusText = "Delivered"
-                target:release()
-                self.currentTask = nil
-                self.targetNode = nil
-                self.path = nil
-                self.harvestTimer = 0
+            if self.currentTask.type == "deliver" then
+                if target:work(self, dt) then
+                    self.resourceHeld = false
+                    self.statusText = "Delivered"
+                    target:release()
+                    self.currentTask = nil
+                    self.targetNode = nil
+                    self.path = nil
+                    self.harvestTimer = 0
+                    self._reservedCell = { x = self.x, y = self.y }
+                    return
+                end
                 self._reservedCell = { x = self.x, y = self.y }
                 return
             end
-            self._reservedCell = { x = self.x, y = self.y }
-            return
         end
     end
 
     self.statusText = self.currentTask.label
-    if not self.path or #self.path == 0 then
-        self.path = findPath(grid, cols, rows, self.x, self.y, target.x, target.y)
+    if not self.path or #self.path == 0 or (self.path[#self.path] and (self.path[#self.path].x ~= workTile.x or self.path[#self.path].y ~= workTile.y)) then
+        if workTile then
+            self.path = findPath(grid, cols, rows, self.x, self.y, workTile.x, workTile.y)
+        end
         if not self.path or #self.path == 0 then
             self.statusText = "Blocked"
             self.path = nil
@@ -374,7 +437,7 @@ function Agent:update(dt, cols, rows, grid, interactables, allAgents)
         end
     end
 
-    local reservations = buildReservationMap(allAgents, self)
+    reservations = buildReservationMap(allAgents, self)
     self.moveTimer = self.moveTimer + dt
     local stepInterval = 1.0 / math.max(0.001, self.moveSpeed)
 
@@ -391,8 +454,8 @@ function Agent:update(dt, cols, rows, grid, interactables, allAgents)
             self._reservedCell = { x = self.x, y = self.y }
             reservations = buildReservationMap(allAgents, self)
         else
-            local goalX = self.targetNode and self.targetNode.x or self.x
-            local goalY = self.targetNode and self.targetNode.y or self.y
+            local goalX = workTile and workTile.x or self.x
+            local goalY = workTile and workTile.y or self.y
             local alternative = findBestAlternativeStep(self, grid, cols, rows, goalX, goalY, reservations)
 
             if alternative and isWalkable(grid, cols, rows, alternative.x, alternative.y) and not reservations[cellKey(alternative.x, alternative.y)] then
