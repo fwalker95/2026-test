@@ -269,23 +269,26 @@ function Agent:chooseTask(interactables)
         return node.kind == "mine" and node:canInteract(self) and (node.resourceLeft == nil or node.resourceLeft > 0) and not node.claimedBy
     end
 
-    local function storageReady(node)
-        return node.kind == "storage" and node:canInteract(self) and (node.capacity == nil or (node.amount or 0) < node.capacity)
+    local function dropOffReady(node)
+        return (node.kind == "box" or node.kind == "storage") and node:canInteract(self) and (node.capacity == nil or (node.amount or 0) < node.capacity) and not node.claimedBy
     end
 
     if self.role == "miner" then
         if self.resourceHeld then
-            local storage = nearestInteractable(self, interactables, storageReady)
-            if storage then
-                self:setTask({ type = "deliver", label = "Delivering", target = storage, kind = "storage" })
-                return self.currentTask
+            local box = nearestInteractable(self, interactables, dropOffReady)
+            if box then
+                if box:claim(self) then
+                    self:setTask({ type = "deliver", label = "Delivering", target = box, kind = box.kind })
+                    return self.currentTask
+                end
             end
         else
             local mine = nearestInteractable(self, interactables, mineReady)
             if mine then
-                mine:claim(self)
-                self:setTask({ type = "mine", label = "Mining", target = mine, kind = "mine" })
-                return self.currentTask
+                if mine:claim(self) then
+                    self:setTask({ type = "mine", label = "Mining", target = mine, kind = "mine" })
+                    return self.currentTask
+                end
             end
         end
     end
