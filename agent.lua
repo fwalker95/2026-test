@@ -222,28 +222,8 @@ local function nearestInteractable(agent, interactables, predicate)
     return best
 end
 
-local function getTaskTile(target, fromX, fromY)
-    if not target then return nil end
-    if target.getNearestWorkTileFrom and type(target.getNearestWorkTileFrom) == "function" then
-        local tile = target:getNearestWorkTileFrom(fromX, fromY)
-        if tile then
-            return tile
-        end
-    end
-
-    if target.isLegalWorkPosition and type(target.isLegalWorkPosition) == "function" then
-        local legal = nil
-        for _, tile in ipairs(target:getWorkTiles and target:getWorkTiles() or {}) do
-            if tile and tile.x and tile.y then
-                if not legal or (manhattan(fromX, fromY, tile.x, tile.y) < manhattan(fromX, fromY, legal.x, legal.y)) then
-                    legal = tile
-                end
-            end
-        end
-        if legal then return legal end
-    end
-
-    return { x = target.x, y = target.y }
+local function hasValidTask(task)
+    return task ~= nil and task.target ~= nil and task.target.enabled ~= false
 end
 
 function Agent.new(x, y, role)
@@ -290,17 +270,11 @@ function Agent:chooseTask(interactables)
     if not interactables then return nil end
 
     local function mineReady(node)
-        if not node or node.kind ~= "mine" then return false end
-        if not node:canInteract(self) then return false end
-        if node.resourceLeft ~= nil and node.resourceLeft <= 0 then return false end
-        return not node.claimedBy
+        return node.kind == "mine" and node:canInteract(self) and (node.resourceLeft == nil or node.resourceLeft > 0) and not node.claimedBy
     end
 
     local function storageReady(node)
-        if not node or node.kind ~= "storage" then return false end
-        if not node:canInteract(self) then return false end
-        if node.capacity == nil then return true end
-        return (node.amount or 0) < node.capacity
+        return node.kind == "storage" and node:canInteract(self) and (node.capacity == nil or (node.amount or 0) < node.capacity)
     end
 
     if self.role == "miner" then
@@ -341,18 +315,16 @@ function Agent:update(dt, cols, rows, grid, interactables, allAgents)
         return
     end
 
-    local target = self.currentTask and self.currentTask.target
-    if not target or not target.enabled then
+    local target = self.currentTask.target
+    if not hasValidTask(self.currentTask) then
         self.currentTask = nil
+        self.targetNode = nil
         self.path = nil
         self._reservedCell = { x = self.x, y = self.y }
         return
     end
 
-    local interactionTile = getTaskTile(target, self.x, self.y)
-    self.currentTask.workTile = interactionTile
-
-    if self.x == interactionTile.x and self.y == interactionTile.y then
+    if self.x == target.x and self.y == target.y then
         self.statusText = self.currentTask.label
         self.harvestTimer = self.harvestTimer + dt
 
@@ -362,6 +334,7 @@ function Agent:update(dt, cols, rows, grid, interactables, allAgents)
                 self.statusText = "Holding resource"
                 target:release()
                 self.currentTask = nil
+                self.targetNode = nil
                 self.path = nil
                 self.harvestTimer = 0
                 self._reservedCell = { x = self.x, y = self.y }
@@ -377,6 +350,7 @@ function Agent:update(dt, cols, rows, grid, interactables, allAgents)
                 self.statusText = "Delivered"
                 target:release()
                 self.currentTask = nil
+                self.targetNode = nil
                 self.path = nil
                 self.harvestTimer = 0
                 self._reservedCell = { x = self.x, y = self.y }
@@ -389,11 +363,12 @@ function Agent:update(dt, cols, rows, grid, interactables, allAgents)
 
     self.statusText = self.currentTask.label
     if not self.path or #self.path == 0 then
-        self.path = findPath(grid, cols, rows, self.x, self.y, interactionTile.x, interactionTile.y)
+        self.path = findPath(grid, cols, rows, self.x, self.y, target.x, target.y)
         if not self.path or #self.path == 0 then
             self.statusText = "Blocked"
             self.path = nil
             self.currentTask = nil
+            self.targetNode = nil
             self._reservedCell = { x = self.x, y = self.y }
             return
         end
