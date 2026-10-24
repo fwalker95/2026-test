@@ -160,6 +160,10 @@ function Agent.new(x, y)
     local self = setmetatable({}, Agent)
     self.x = math.floor(x or 1)
     self.y = math.floor(y or 1)
+    self.renderX = self.x - 0.5
+    self.renderY = self.y - 0.5
+    self.targetRenderX = self.renderX
+    self.targetRenderY = self.renderY
 
     self.worldState = {
         knowsLocation = false,
@@ -180,8 +184,21 @@ function Agent.new(x, y)
     return self
 end
 
-function Agent:update(dt, cols, rows, grid, resourceNodes, boxNodes)
+function Agent:update(dt, cols, rows, grid, resourceNodes, boxNodes, allAgents)
     dt = dt or 0.016
+
+    self.renderX = self.renderX + (self.targetRenderX - self.renderX) * math.min(1, dt * 12)
+    self.renderY = self.renderY + (self.targetRenderY - self.renderY) * math.min(1, dt * 12)
+
+    local function isOccupiedByAnotherAgent(goalX, goalY)
+        if not allAgents then return false end
+        for _, other in ipairs(allAgents) do
+            if other ~= self and other.x == goalX and other.y == goalY then
+                return true
+            end
+        end
+        return false
+    end
 
     if not self.resourceHeld then
         if not self.targetNode or self.targetNode.type ~= "resource" then
@@ -267,11 +284,15 @@ function Agent:update(dt, cols, rows, grid, resourceNodes, boxNodes)
     while self.moveTimer >= stepInterval and self.path and #self.path > 0 do
         self.moveTimer = self.moveTimer - stepInterval
         local nextCell = table.remove(self.path, 1)
-        if isWalkable(grid, cols, rows, nextCell.x, nextCell.y) then
+
+        if isWalkable(grid, cols, rows, nextCell.x, nextCell.y) and not isOccupiedByAnotherAgent(nextCell.x, nextCell.y) then
             self.x = nextCell.x
             self.y = nextCell.y
+            self.targetRenderX = self.x - 0.5
+            self.targetRenderY = self.y - 0.5
         else
             self.path = nil
+            self.statusText = "Waiting"
             break
         end
     end

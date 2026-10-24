@@ -203,6 +203,12 @@ function love.update(dt)
                         break
                     end
                 end
+                for _, agent in ipairs(agents) do
+                    if agent.x == cx and agent.y == cy then
+                        occupied = true
+                        break
+                    end
+                end
                 if not occupied then
                     table.insert(resourceNodes, { x = cx, y = cy, remaining = 5, type = "resource" })
                 end
@@ -216,6 +222,12 @@ function love.update(dt)
                 end
                 for _, box in ipairs(boxNodes) do
                     if box.x == cx and box.y == cy then
+                        occupied = true
+                        break
+                    end
+                end
+                for _, agent in ipairs(agents) do
+                    if agent.x == cx and agent.y == cy then
                         occupied = true
                         break
                     end
@@ -236,7 +248,7 @@ function love.update(dt)
     end
 
     for _, agent in ipairs(agents) do
-        agent:update(dt, cols, rows, grid, resourceNodes, boxNodes)
+        agent:update(dt, cols, rows, grid, resourceNodes, boxNodes, agents)
     end
 end
 
@@ -245,7 +257,16 @@ function love.keypressed(key)
         local mx, my = love.mouse.getPosition()
         local cx, cy = math.floor(mx / cellSize) + 1, math.floor(my / cellSize) + 1
         if cx >= 1 and cx <= cols and cy >= 1 and cy <= rows then
-            table.insert(agents, Agent.new(cx, cy))
+            local occupied = false
+            for _, agent in ipairs(agents) do
+                if agent.x == cx and agent.y == cy then
+                    occupied = true
+                    break
+                end
+            end
+            if not occupied then
+                table.insert(agents, Agent.new(cx, cy))
+            end
         end
     end
 
@@ -310,6 +331,12 @@ function love.mousepressed(x, y, button)
                     break
                 end
             end
+            for _, agent in ipairs(agents) do
+                if agent.x == cx and agent.y == cy then
+                    occupied = true
+                    break
+                end
+            end
             if not occupied then
                 table.insert(resourceNodes, { x = cx, y = cy, remaining = 5, type = "resource" })
             end
@@ -323,6 +350,12 @@ function love.mousepressed(x, y, button)
             end
             for _, box in ipairs(boxNodes) do
                 if box.x == cx and box.y == cy then
+                    occupied = true
+                    break
+                end
+            end
+            for _, agent in ipairs(agents) do
+                if agent.x == cx and agent.y == cy then
                     occupied = true
                     break
                 end
@@ -401,7 +434,8 @@ function love.draw()
 
     love.graphics.setColor(0.2, 1, 0.3)
     for _, agent in ipairs(agents) do
-        local px, py = (agent.x - 1) * cellSize, (agent.y - 1) * cellSize
+        local px = (agent.renderX - 0.5) * cellSize
+        local py = (agent.renderY - 0.5) * cellSize
         love.graphics.rectangle("fill", px, py, cellSize - 1, cellSize - 1)
         love.graphics.setColor(1, 1, 1)
         love.graphics.print(agent.statusText, px - 10, py - 18)
