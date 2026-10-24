@@ -47,9 +47,8 @@ end
 local function isWalkable(grid, cols, rows, x, y)
     if not x or not y then return false end
     if x < 1 or x > cols or y < 1 or y > rows then return false end
-    -- Standard convention: grid[y][x] == 1 or true means wall/blocked; 0, nil, or false means open
-    if grid and grid[y] then
-        local cell = grid[y][x]
+    if grid and grid[x] then
+        local cell = grid[x][y]
         if cell == 1 or cell == true or cell == "wall" then
             return false
         end
@@ -189,7 +188,7 @@ function Agent.new(x, y)
     self.statusText = "Idle"
     
     -- Movement & timing configuration
-    self.moveSpeed = 4.0            -- Tiles per second
+    self.moveSpeed = 2.0            -- 2 cells/sec = 0.5s per cell
     self.moveTimer = 0              -- Accumulator for movement
     self.path = nil                 -- Current path waypoints
     
