@@ -19,9 +19,6 @@ function love.load()
     agents = {}
     -- Start with 1 agent at (10, 15)
     table.insert(agents, Agent.new(10, 15))
-
-    moveTimer = 0
-    moveInterval = 0.2 -- Speed step
 end
 
 function love.update(dt)
@@ -45,13 +42,9 @@ function love.update(dt)
         end
     end
 
-    -- Step agents on timer tick
-    moveTimer = moveTimer + dt
-    if moveTimer >= moveInterval then
-        moveTimer = 0
-        for _, agent in ipairs(agents) do
-            agent:update(dt, cols, rows, grid, resourceX, resourceY)
-        end
+    -- Update agents every frame; the agent itself controls movement timing.
+    for _, agent in ipairs(agents) do
+        agent:update(dt, cols, rows, grid, resourceX, resourceY)
     end
 end
 
