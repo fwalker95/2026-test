@@ -5,7 +5,6 @@
 local Agent = {}
 Agent.__index = Agent
 
--- Helper: Deep clone a simple key-value table
 local function cloneTable(t)
     if type(t) ~= "table" then return t end
     local copy = {}
@@ -15,7 +14,6 @@ local function cloneTable(t)
     return copy
 end
 
--- Helper: Serialize state to string for visited set in GOAP planner
 local function stateToKey(state)
     local keys = {}
     for k in pairs(state) do
@@ -29,7 +27,6 @@ local function stateToKey(state)
     return table.concat(parts, ";")
 end
 
--- Helper: Check if a state satisfies required conditions
 local function satisfies(state, conditions)
     if not conditions then return true end
     for k, v in pairs(conditions) do
@@ -38,12 +35,10 @@ local function satisfies(state, conditions)
     return true
 end
 
--- Helper: Manhattan distance on grid
 local function manhattan(x1, y1, x2, y2)
     return math.abs(x1 - x2) + math.abs(y1 - y2)
 end
 
--- Helper: Check if a grid coordinate is walkable
 local function isWalkable(grid, cols, rows, x, y)
     if not x or not y then return false end
     if x < 1 or x > cols or y < 1 or y > rows then return false end
@@ -63,7 +58,6 @@ local function nearestNodeFromList(x, y, nodes)
 
     local bestNode = nil
     local bestDist = math.huge
-
     for _, node in ipairs(nodes) do
         local d = manhattan(x, y, node.x, node.y)
         if d < bestDist then
@@ -71,11 +65,9 @@ local function nearestNodeFromList(x, y, nodes)
             bestNode = node
         end
     end
-
     return bestNode
 end
 
--- Helper: A* Pathfinding to navigate around walls and obstacles
 local function findPath(grid, cols, rows, startX, startY, goalX, goalY)
     if startX == goalX and startY == goalY then
         return {}
@@ -162,7 +154,6 @@ local function findPath(grid, cols, rows, startX, startY, goalX, goalY)
     return nil
 end
 
--- Constructor
 function Agent.new(x, y)
     local self = setmetatable({}, Agent)
     self.x = math.floor(x or 1)
@@ -174,88 +165,23 @@ function Agent.new(x, y)
         hasResource = false
     }
 
-    self.actions = {
-        { name = "FindResource", cost = 1, preconditions = { knowsLocation = false }, effects = { knowsLocation = true } },
-        { name = "WalkToResource", cost = 2, preconditions = { knowsLocation = true, atResource = false }, effects = { atResource = true } },
-        { name = "Harvest", cost = 3, preconditions = { atResource = true, hasResource = false }, effects = { hasResource = true } }
-    }
-
     self.currentPlan = {}
     self.statusText = "Idle"
-
     self.moveSpeed = 2.0
     self.moveTimer = 0
     self.path = nil
-    self.harvestTimer = 0
-    self.requiredHarvestTime = 3.0
     self.targetNode = nil
+    self.harvestTimer = 0
+    self.requiredHarvestTime = 2.0
+    self.resourceHeld = false
 
     return self
 end
 
-function Agent:plan(goalState)
-    local queue = {}
-    local visited = {}
-
-    local initialNode = {
-        state = cloneTable(self.worldState),
-        plan = {},
-        cost = 0
-    }
-    table.insert(queue, initialNode)
-    visited[stateToKey(initialNode.state)] = true
-
-    local safety = 0
-    while #queue > 0 and safety < 200 do
-        safety = safety + 1
-
-        local bestIdx = 1
-        for i = 2, #queue do
-            if queue[i].cost < queue[bestIdx].cost then
-                bestIdx = i
-            end
-        end
-        local current = table.remove(queue, bestIdx)
-
-        if satisfies(current.state, goalState) then
-            return current.plan
-        end
-
-        for _, action in ipairs(self.actions) do
-            if satisfies(current.state, action.preconditions) then
-                local nextState = cloneTable(current.state)
-                for k, v in pairs(action.effects) do
-                    nextState[k] = v
-                end
-
-                local key = stateToKey(nextState)
-                if not visited[key] then
-                    visited[key] = true
-
-                    local nextPlan = {}
-                    for _, a in ipairs(current.plan) do
-                        table.insert(nextPlan, a)
-                    end
-                    table.insert(nextPlan, action)
-
-                    table.insert(queue, {
-                        state = nextState,
-                        plan = nextPlan,
-                        cost = current.cost + (action.cost or 1)
-                    })
-                end
-            end
-        end
-    end
-
-    return {}
-end
-
--- Main update loop
 function Agent:update(dt, cols, rows, grid, resourceNodes, boxNodes)
     dt = dt or 0.016
 
-    if not self.worldState.hasResource then
+    if not self.resourceHeld then
         if not self.targetNode or self.targetNode.type ~= "resource" then
             self.targetNode = nearestNodeFromList(self.x, self.y, resourceNodes)
         end
@@ -267,10 +193,15 @@ function Agent:update(dt, cols, rows, grid, resourceNodes, boxNodes)
         end
 
         if self.x == self.targetNode.x and self.y == self.targetNode.y then
-            self.worldState.hasResource = true
-            self.statusText = "Holding resource"
-            self.path = nil
-            self.targetNode = nil
+            self.statusText = "Mining"
+            self.harvestTimer = self.harvestTimer + dt
+            if self.harvestTimer >= self.requiredHarvestTime then
+                self.resourceHeld = true
+                self.harvestTimer = 0
+                self.statusText = "Holding resource"
+                self.targetNode = nil
+                self.path = nil
+            end
             return
         end
 
@@ -295,10 +226,11 @@ function Agent:update(dt, cols, rows, grid, resourceNodes, boxNodes)
         end
 
         if self.x == self.targetNode.x and self.y == self.targetNode.y then
-            self.worldState.hasResource = false
+            self.resourceHeld = false
             self.statusText = "Delivered"
-            self.path = nil
             self.targetNode = nil
+            self.path = nil
+            self.harvestTimer = 0
             return
         end
 
@@ -315,7 +247,6 @@ function Agent:update(dt, cols, rows, grid, resourceNodes, boxNodes)
 
     self.moveTimer = self.moveTimer + dt
     local stepInterval = 1.0 / math.max(0.001, self.moveSpeed)
-
     while self.moveTimer >= stepInterval and self.path and #self.path > 0 do
         self.moveTimer = self.moveTimer - stepInterval
         local nextCell = table.remove(self.path, 1)
