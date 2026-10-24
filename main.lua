@@ -102,7 +102,7 @@ function AgentListMenu:new(x, y, w)
 
         for i, agent in ipairs(agents) do
             local status = agent.statusText or "Idle"
-            local holding = agent.worldState and tostring(agent.worldState.hasResource) or "false"
+            local holding = agent.resourceHeld and "yes" or "no"
             local label = string.format("Agent %d: (%d,%d) %s hold=%s", i, agent.x, agent.y, status, holding)
             table.insert(self.items, {
                 label = label,
@@ -125,9 +125,11 @@ function love.load()
     end
 
     resourceNodes = {
-        { x = 30, y = 15 }
+        { x = 30, y = 15, remaining = 5, type = "resource" }
     }
-    boxNodes = {}
+    boxNodes = {
+        { x = 20, y = 15, amount = 0, capacity = 10, type = "box" }
+    }
 
     agents = {}
     table.insert(agents, Agent.new(10, 15))
@@ -202,7 +204,7 @@ function love.update(dt)
                     end
                 end
                 if not occupied then
-                    table.insert(resourceNodes, { x = cx, y = cy })
+                    table.insert(resourceNodes, { x = cx, y = cy, remaining = 5, type = "resource" })
                 end
             elseif selectedTool == "box" then
                 local occupied = false
@@ -219,7 +221,7 @@ function love.update(dt)
                     end
                 end
                 if not occupied then
-                    table.insert(boxNodes, { x = cx, y = cy })
+                    table.insert(boxNodes, { x = cx, y = cy, amount = 0, capacity = 10, type = "box" })
                 end
             end
         end
@@ -309,7 +311,7 @@ function love.mousepressed(x, y, button)
                 end
             end
             if not occupied then
-                table.insert(resourceNodes, { x = cx, y = cy })
+                table.insert(resourceNodes, { x = cx, y = cy, remaining = 5, type = "resource" })
             end
         elseif selectedTool == "box" then
             local occupied = false
@@ -326,7 +328,7 @@ function love.mousepressed(x, y, button)
                 end
             end
             if not occupied then
-                table.insert(boxNodes, { x = cx, y = cy })
+                table.insert(boxNodes, { x = cx, y = cy, amount = 0, capacity = 10, type = "box" })
             end
         end
     end
@@ -364,6 +366,14 @@ function love.draw()
 
             love.graphics.rectangle("fill", px, py, cellSize - 1, cellSize - 1)
         end
+    end
+
+    for _, box in ipairs(boxNodes) do
+        local pct = math.floor((box.amount / math.max(1, box.capacity)) * 100)
+        local px = (box.x - 1) * cellSize + 2
+        local py = (box.y - 1) * cellSize - 14
+        love.graphics.setColor(1, 1, 1)
+        love.graphics.print(string.format("[%d%%]", pct), px, py)
     end
 
     love.graphics.setColor(0.12, 0.12, 0.18, 0.9)
