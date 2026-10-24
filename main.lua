@@ -50,7 +50,7 @@ function love.update(dt)
     if moveTimer >= moveInterval then
         moveTimer = 0
         for _, agent in ipairs(agents) do
-            agent:update(cols, rows, grid, resourceX, resourceY)
+            agent:update(dt, cols, rows, grid, resourceX, resourceY)
         end
     end
 end
