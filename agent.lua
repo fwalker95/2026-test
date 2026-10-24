@@ -39,6 +39,10 @@ local function manhattan(x1, y1, x2, y2)
     return math.abs(x1 - x2) + math.abs(y1 - y2)
 end
 
+local function cellKey(x, y)
+    return tostring(x) .. "," .. tostring(y)
+end
+
 local function isWalkable(grid, cols, rows, x, y)
     if not x or not y then return false end
     if x < 1 or x > cols or y < 1 or y > rows then return false end
@@ -156,6 +160,47 @@ local function findPath(grid, cols, rows, startX, startY, goalX, goalY)
     return nil
 end
 
+local function buildReservationMap(agents, ignoreAgent)
+    local reservations = {}
+    if not agents then return reservations end
+
+    for _, other in ipairs(agents) do
+        if other ~= ignoreAgent and other.x and other.y then
+            reservations[cellKey(other.x, other.y)] = true
+        end
+    end
+
+    return reservations
+end
+
+local function findBestAlternativeStep(agent, grid, cols, rows, goalX, goalY, reservations)
+    local best = nil
+    local bestScore = math.huge
+    local options = {
+        {0, 1}, {0, -1}, {1, 0}, {-1, 0},
+        {1, 1}, {-1, 1}, {1, -1}, {-1, -1},
+        {2, 0}, {-2, 0}, {0, 2}, {0, -2},
+        {1, 2}, {-1, 2}, {1, -2}, {-1, -2},
+        {2, 1}, {2, -1}, {-2, 1}, {-2, -1}
+    }
+
+    for _, dir in ipairs(options) do
+        local nx, ny = agent.x + dir[1], agent.y + dir[2]
+        local key = cellKey(nx, ny)
+
+        if isWalkable(grid, cols, rows, nx, ny) and not reservations[key] then
+            local score = manhattan(nx, ny, goalX, goalY)
+            score = score + (math.abs(nx - agent.x) + math.abs(ny - agent.y)) * 0.85
+            if score < bestScore then
+                bestScore = score
+                best = { x = nx, y = ny }
+            end
+        end
+    end
+
+    return best
+end
+
 function Agent.new(x, y)
     local self = setmetatable({}, Agent)
     self.x = math.floor(x or 1)
@@ -180,25 +225,17 @@ function Agent.new(x, y)
     self.harvestTimer = 0
     self.requiredHarvestTime = 2.0
     self.resourceHeld = false
+    self.crowdCooldown = 0
 
     return self
 end
 
 function Agent:update(dt, cols, rows, grid, resourceNodes, boxNodes, allAgents)
     dt = dt or 0.016
+    self.crowdCooldown = math.max(0, self.crowdCooldown - dt)
 
     self.renderX = self.renderX + (self.targetRenderX - self.renderX) * math.min(1, dt * 12)
     self.renderY = self.renderY + (self.targetRenderY - self.renderY) * math.min(1, dt * 12)
-
-    local function isOccupiedByAnotherAgent(goalX, goalY)
-        if not allAgents then return false end
-        for _, other in ipairs(allAgents) do
-            if other ~= self and other.x == goalX and other.y == goalY then
-                return true
-            end
-        end
-        return false
-    end
 
     if not self.resourceHeld then
         if not self.targetNode or self.targetNode.type ~= "resource" then
@@ -279,21 +316,39 @@ function Agent:update(dt, cols, rows, grid, resourceNodes, boxNodes, allAgents)
         end
     end
 
+    local reservations = buildReservationMap(allAgents, self)
     self.moveTimer = self.moveTimer + dt
     local stepInterval = 1.0 / math.max(0.001, self.moveSpeed)
+
     while self.moveTimer >= stepInterval and self.path and #self.path > 0 do
         self.moveTimer = self.moveTimer - stepInterval
         local nextCell = table.remove(self.path, 1)
+        local nextKey = cellKey(nextCell.x, nextCell.y)
 
-        if isWalkable(grid, cols, rows, nextCell.x, nextCell.y) and not isOccupiedByAnotherAgent(nextCell.x, nextCell.y) then
+        if isWalkable(grid, cols, rows, nextCell.x, nextCell.y) and not reservations[nextKey] then
             self.x = nextCell.x
             self.y = nextCell.y
             self.targetRenderX = self.x - 0.5
             self.targetRenderY = self.y - 0.5
+            reservations = buildReservationMap(allAgents, self)
         else
-            self.path = nil
-            self.statusText = "Waiting"
-            break
+            local goalX = self.targetNode and self.targetNode.x or self.x
+            local goalY = self.targetNode and self.targetNode.y or self.y
+            local alternative = findBestAlternativeStep(self, grid, cols, rows, goalX, goalY, reservations)
+
+            if alternative and isWalkable(grid, cols, rows, alternative.x, alternative.y) then
+                self.x = alternative.x
+                self.y = alternative.y
+                self.targetRenderX = self.x - 0.5
+                self.targetRenderY = self.y - 0.5
+                self.statusText = "Making space"
+                reservations = buildReservationMap(allAgents, self)
+            else
+                self.path = nil
+                self.statusText = "Yielding"
+                self.crowdCooldown = 0.25
+                break
+            end
         end
     end
 end
