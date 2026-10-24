@@ -95,8 +95,13 @@ end
 
 function Interactable:work(agent, dt)
     if not agent then return false end
+    if not self.enabled then return false end
     if not self:canInteract(agent) then return false end
-    if not self:isLegalWorkPosition(agent.x, agent.y) then return false end
+
+    if self.isLegalWorkPosition and not self:isLegalWorkPosition(agent.x, agent.y) then
+        return false
+    end
+
     if self.resourceLeft ~= nil and self.resourceLeft <= 0 then return false end
     if self.capacity ~= nil and self.amount >= self.capacity then return false end
 
