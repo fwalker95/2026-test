@@ -56,17 +56,32 @@ local function isWalkable(grid, cols, rows, x, y)
     return true
 end
 
+local function nearestNodeFromList(x, y, nodes)
+    if not nodes or #nodes == 0 then
+        return nil
+    end
+
+    local bestNode = nil
+    local bestDist = math.huge
+
+    for _, node in ipairs(nodes) do
+        local d = manhattan(x, y, node.x, node.y)
+        if d < bestDist then
+            bestDist = d
+            bestNode = node
+        end
+    end
+
+    return bestNode
+end
+
 -- Helper: A* Pathfinding to navigate around walls and obstacles
 local function findPath(grid, cols, rows, startX, startY, goalX, goalY)
     if startX == goalX and startY == goalY then
         return {}
     end
 
-    -- If goal itself is blocked (e.g. resource is a solid rock/tree),
-    -- target the nearest walkable adjacent cell instead.
-    local targetIsGoal = true
     if not isWalkable(grid, cols, rows, goalX, goalY) then
-        targetIsGoal = false
         local bestAdjX, bestAdjY = nil, nil
         local bestDist = math.huge
         local neighbors = { {0, 1}, {0, -1}, {1, 0}, {-1, 0} }
@@ -80,7 +95,7 @@ local function findPath(grid, cols, rows, startX, startY, goalX, goalY)
                 end
             end
         end
-        if not bestAdjX then return nil end -- completely blocked
+        if not bestAdjX then return nil end
         goalX, goalY = bestAdjX, bestAdjY
         if startX == goalX and startY == goalY then
             return {}
@@ -100,7 +115,6 @@ local function findPath(grid, cols, rows, startX, startY, goalX, goalY)
 
     while #openSet > 0 and steps < maxSteps do
         steps = steps + 1
-        -- Find node with lowest f score
         local bestIdx = 1
         local lowestF = openSet[1].f
         for i = 2, #openSet do
@@ -114,7 +128,6 @@ local function findPath(grid, cols, rows, startX, startY, goalX, goalY)
         inOpen[posKey(current.x, current.y)] = nil
 
         if current.x == goalX and current.y == goalY then
-            -- Reconstruct path
             local path = {}
             local currKey = posKey(goalX, goalY)
             while cameFrom[currKey] do
@@ -146,7 +159,7 @@ local function findPath(grid, cols, rows, startX, startY, goalX, goalY)
         end
     end
 
-    return nil -- No path found
+    return nil
 end
 
 -- Constructor
@@ -154,56 +167,36 @@ function Agent.new(x, y)
     local self = setmetatable({}, Agent)
     self.x = math.floor(x or 1)
     self.y = math.floor(y or 1)
-    
-    -- Agent's internal belief state
+
     self.worldState = {
         knowsLocation = false,
         atResource = false,
         hasResource = false
     }
 
-    -- Action Toolbox
     self.actions = {
-        {
-            name = "FindResource",
-            cost = 1,
-            preconditions = { knowsLocation = false },
-            effects = { knowsLocation = true }
-        },
-        {
-            name = "WalkToResource",
-            cost = 2,
-            preconditions = { knowsLocation = true, atResource = false },
-            effects = { atResource = true }
-        },
-        {
-            name = "Harvest",
-            cost = 3,
-            preconditions = { atResource = true, hasResource = false },
-            effects = { hasResource = true }
-        }
+        { name = "FindResource", cost = 1, preconditions = { knowsLocation = false }, effects = { knowsLocation = true } },
+        { name = "WalkToResource", cost = 2, preconditions = { knowsLocation = true, atResource = false }, effects = { atResource = true } },
+        { name = "Harvest", cost = 3, preconditions = { atResource = true, hasResource = false }, effects = { hasResource = true } }
     }
-    
+
     self.currentPlan = {}
     self.statusText = "Idle"
-    
-    -- Movement & timing configuration
-    self.moveSpeed = 2.0            -- 2 cells/sec = 0.5s per cell
-    self.moveTimer = 0              -- Accumulator for movement
-    self.path = nil                 -- Current path waypoints
-    
-    -- Harvest configuration
+
+    self.moveSpeed = 2.0
+    self.moveTimer = 0
+    self.path = nil
     self.harvestTimer = 0
-    self.requiredHarvestTime = 3.0  -- Takes 3 seconds to mine
-    
+    self.requiredHarvestTime = 3.0
+    self.targetNode = nil
+
     return self
 end
 
--- GOAP State Space Planner with visited-set optimization and cost tracking
 function Agent:plan(goalState)
     local queue = {}
     local visited = {}
-    
+
     local initialNode = {
         state = cloneTable(self.worldState),
         plan = {},
@@ -215,8 +208,7 @@ function Agent:plan(goalState)
     local safety = 0
     while #queue > 0 and safety < 200 do
         safety = safety + 1
-        
-        -- Pop cheapest / earliest node
+
         local bestIdx = 1
         for i = 2, #queue do
             if queue[i].cost < queue[bestIdx].cost then
@@ -225,12 +217,10 @@ function Agent:plan(goalState)
         end
         local current = table.remove(queue, bestIdx)
 
-        -- Goal check
         if satisfies(current.state, goalState) then
             return current.plan
         end
 
-        -- Expand valid actions
         for _, action in ipairs(self.actions) do
             if satisfies(current.state, action.preconditions) then
                 local nextState = cloneTable(current.state)
@@ -241,7 +231,7 @@ function Agent:plan(goalState)
                 local key = stateToKey(nextState)
                 if not visited[key] then
                     visited[key] = true
-                    
+
                     local nextPlan = {}
                     for _, a in ipairs(current.plan) do
                         table.insert(nextPlan, a)
@@ -258,128 +248,83 @@ function Agent:plan(goalState)
         end
     end
 
-    return {} -- No feasible plan found
+    return {}
 end
 
 -- Main update loop
-function Agent:update(dt, cols, rows, grid, targetX, targetY, resourceNode)
+function Agent:update(dt, cols, rows, grid, resourceNodes, boxNodes)
     dt = dt or 0.016
 
-    -- 1. Check if target resource is depleted
-    if resourceNode and (resourceNode.usesLeft ~= nil and resourceNode.usesLeft <= 0) then
-        -- Only reset location/destination flags; DO NOT clear hasResource if we already mined it!
-        self.worldState.knowsLocation = false
-        self.worldState.atResource = false
-        self.path = nil
-        self.harvestTimer = 0
-        if not self.worldState.hasResource then
-            self.currentPlan = {}
-            self.statusText = "Resource Depleted - Searching..."
+    if not self.worldState.hasResource then
+        if not self.targetNode or self.targetNode.type ~= "resource" then
+            self.targetNode = nearestNodeFromList(self.x, self.y, resourceNodes)
+        end
+
+        if not self.targetNode then
+            self.statusText = "Need resource"
+            self.path = nil
             return
         end
-    end
 
-    -- 2. Formulate plan if plan queue is empty and goal not yet met
-    if #self.currentPlan == 0 and not self.worldState.hasResource then
-        self.currentPlan = self:plan({ hasResource = true })
-        if #self.currentPlan == 0 then
-            self.statusText = "No valid plan available"
+        if self.x == self.targetNode.x and self.y == self.targetNode.y then
+            self.worldState.hasResource = true
+            self.statusText = "Holding resource"
+            self.path = nil
+            self.targetNode = nil
             return
         end
-    end
 
-    -- 3. Execute current action in plan
-    if #self.currentPlan > 0 then
-        local nextAction = self.currentPlan[1]
-        
-        -- Action: FindResource
-        if nextAction.name == "FindResource" then
-            self.statusText = "Plan: Located Resource Node"
-            self.worldState.knowsLocation = true
-            self.path = nil -- clear old path
-            table.remove(self.currentPlan, 1)
-            
-        -- Action: WalkToResource
-        elseif nextAction.name == "WalkToResource" then
-            if not targetX or not targetY then
-                self.statusText = "Error: Invalid target coordinates"
-                return
-            end
-
-            -- Arrival check (either on tile or directly adjacent if tile is solid)
-            local isDirectArrival = (self.x == targetX and self.y == targetY)
-            local isAdjacentArrival = (manhattan(self.x, self.y, targetX, targetY) <= 1) and not isWalkable(grid, cols, rows, targetX, targetY)
-            
-            if isDirectArrival or isAdjacentArrival then
-                self.worldState.atResource = true
-                self.path = nil
-                self.moveTimer = 0
-                table.remove(self.currentPlan, 1)
-                return
-            end
-
-            self.statusText = "Executing: Walking to Resource"
-            
-            -- Compute path if not cached or if reached last waypoint
+        self.statusText = "Gathering"
+        if not self.path or #self.path == 0 then
+            self.path = findPath(grid, cols, rows, self.x, self.y, self.targetNode.x, self.targetNode.y)
             if not self.path or #self.path == 0 then
-                self.path = findPath(grid, cols, rows, self.x, self.y, targetX, targetY)
-                if not self.path or #self.path == 0 then
-                    self.statusText = "Blocked: No path to resource"
-                    -- Replanning trigger: reset knowsLocation so agent can find another node
-                    self.worldState.knowsLocation = false
-                    self.currentPlan = {}
-                    return
-                end
-            end
-
-            -- Step-by-step movement regulated by delta-time (moveSpeed)
-            self.moveTimer = self.moveTimer + dt
-            local stepInterval = 1.0 / math.max(0.001, self.moveSpeed)
-            
-            while self.moveTimer >= stepInterval and self.path and #self.path > 0 do
-                self.moveTimer = self.moveTimer - stepInterval
-                local nextCell = table.remove(self.path, 1)
-                if isWalkable(grid, cols, rows, nextCell.x, nextCell.y) then
-                    self.x = nextCell.x
-                    self.y = nextCell.y
-                else
-                    -- Obstacle appeared dynamically; invalidate path to recalculate next frame
-                    self.path = nil
-                    break
-                end
-            end
-
-            -- Re-check arrival after moving
-            if (self.x == targetX and self.y == targetY) or 
-               ((manhattan(self.x, self.y, targetX, targetY) <= 1) and not isWalkable(grid, cols, rows, targetX, targetY)) then
-                self.worldState.atResource = true
+                self.statusText = "Blocked"
                 self.path = nil
-                self.moveTimer = 0
-                table.remove(self.currentPlan, 1)
-            end
-            
-        -- Action: Harvest
-        elseif nextAction.name == "Harvest" then
-            self.harvestTimer = self.harvestTimer + dt
-            local timeLeft = math.max(0, self.requiredHarvestTime - self.harvestTimer)
-            self.statusText = string.format("Mining... (%.1fs left)", timeLeft)
-            
-            if self.harvestTimer >= self.requiredHarvestTime then
-                self.statusText = "Executing: Harvest Complete!"
-                self.worldState.hasResource = true
-                
-                -- Decrement resource uses safely
-                if resourceNode and resourceNode.usesLeft then
-                    resourceNode.usesLeft = resourceNode.usesLeft - 1
-                end
-                
-                self.harvestTimer = 0
-                table.remove(self.currentPlan, 1)
+                return
             end
         end
     else
-        if self.worldState.hasResource then
-            self.statusText = "Goal Complete: Resource Secured!"
+        if not self.targetNode or self.targetNode.type ~= "box" then
+            self.targetNode = nearestNodeFromList(self.x, self.y, boxNodes)
+        end
+
+        if not self.targetNode then
+            self.statusText = "Need box"
+            self.path = nil
+            return
+        end
+
+        if self.x == self.targetNode.x and self.y == self.targetNode.y then
+            self.worldState.hasResource = false
+            self.statusText = "Delivered"
+            self.path = nil
+            self.targetNode = nil
+            return
+        end
+
+        self.statusText = "Delivering"
+        if not self.path or #self.path == 0 then
+            self.path = findPath(grid, cols, rows, self.x, self.y, self.targetNode.x, self.targetNode.y)
+            if not self.path or #self.path == 0 then
+                self.statusText = "Blocked"
+                self.path = nil
+                return
+            end
+        end
+    end
+
+    self.moveTimer = self.moveTimer + dt
+    local stepInterval = 1.0 / math.max(0.001, self.moveSpeed)
+
+    while self.moveTimer >= stepInterval and self.path and #self.path > 0 do
+        self.moveTimer = self.moveTimer - stepInterval
+        local nextCell = table.remove(self.path, 1)
+        if isWalkable(grid, cols, rows, nextCell.x, nextCell.y) then
+            self.x = nextCell.x
+            self.y = nextCell.y
+        else
+            self.path = nil
+            break
         end
     end
 end
