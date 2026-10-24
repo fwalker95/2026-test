@@ -1,5 +1,6 @@
 -- main.lua
 local Agent = require("agent")
+local Interactable = require("interactable")
 
 local function listAgentsMenu(agents)
     local items = {}
@@ -124,15 +125,15 @@ function love.load()
         for y = 1, rows do grid[x][y] = 0 end
     end
 
-    resourceNodes = {
-        { x = 30, y = 15, remaining = 5, type = "resource" }
-    }
-    boxNodes = {
-        { x = 20, y = 15, amount = 0, capacity = 10, type = "box" }
+    interactables = {
+        Interactable.new("mine", 30, 15, { allowedRoles = { "miner" }, resourceLeft = 5, interactionTime = 1.5 }),
+        Interactable.new("mine", 27, 20, { allowedRoles = { "miner" }, resourceLeft = 5, interactionTime = 1.5 }),
+        Interactable.new("storage", 20, 15, { allowedRoles = { "miner" }, capacity = 10, amount = 0, interactionTime = 1.0 }),
     }
 
     agents = {}
-    table.insert(agents, Agent.new(10, 15))
+    table.insert(agents, Agent.new(10, 15, "miner"))
+    table.insert(agents, Agent.new(12, 17, "miner"))
 
     selectedTool = "resource"
     menuRect = { x = 10, y = 10, w = 150, h = 80 }
@@ -176,14 +177,10 @@ function love.update(dt)
         if cx >= 1 and cx <= cols and cy >= 1 and cy <= rows then
             if selectedTool == "erase" then
                 grid[cx][cy] = 0
-                for i = #resourceNodes, 1, -1 do
-                    if resourceNodes[i].x == cx and resourceNodes[i].y == cy then
-                        table.remove(resourceNodes, i)
-                    end
-                end
-                for i = #boxNodes, 1, -1 do
-                    if boxNodes[i].x == cx and boxNodes[i].y == cy then
-                        table.remove(boxNodes, i)
+                for i = #interactables, 1, -1 do
+                    local item = interactables[i]
+                    if item.x == cx and item.y == cy then
+                        table.remove(interactables, i)
                     end
                 end
                 return
@@ -191,14 +188,8 @@ function love.update(dt)
 
             if selectedTool == "resource" then
                 local occupied = false
-                for _, node in ipairs(resourceNodes) do
-                    if node.x == cx and node.y == cy then
-                        occupied = true
-                        break
-                    end
-                end
-                for _, box in ipairs(boxNodes) do
-                    if box.x == cx and box.y == cy then
+                for _, item in ipairs(interactables) do
+                    if item.x == cx and item.y == cy then
                         occupied = true
                         break
                     end
@@ -210,18 +201,16 @@ function love.update(dt)
                     end
                 end
                 if not occupied then
-                    table.insert(resourceNodes, { x = cx, y = cy, remaining = 5, type = "resource" })
+                    table.insert(interactables, Interactable.new("mine", cx, cy, {
+                        allowedRoles = { "miner" },
+                        resourceLeft = 5,
+                        interactionTime = 1.5,
+                    }))
                 end
             elseif selectedTool == "box" then
                 local occupied = false
-                for _, node in ipairs(resourceNodes) do
-                    if node.x == cx and node.y == cy then
-                        occupied = true
-                        break
-                    end
-                end
-                for _, box in ipairs(boxNodes) do
-                    if box.x == cx and box.y == cy then
+                for _, item in ipairs(interactables) do
+                    if item.x == cx and item.y == cy then
                         occupied = true
                         break
                     end
@@ -233,7 +222,12 @@ function love.update(dt)
                     end
                 end
                 if not occupied then
-                    table.insert(boxNodes, { x = cx, y = cy, amount = 0, capacity = 10, type = "box" })
+                    table.insert(interactables, Interactable.new("storage", cx, cy, {
+                        allowedRoles = { "miner" },
+                        capacity = 10,
+                        amount = 0,
+                        interactionTime = 1.0,
+                    }))
                 end
             end
         end
@@ -248,7 +242,7 @@ function love.update(dt)
     end
 
     for _, agent in ipairs(agents) do
-        agent:update(dt, cols, rows, grid, resourceNodes, boxNodes, agents)
+        agent:update(dt, cols, rows, grid, interactables, agents)
     end
 end
 
@@ -265,7 +259,7 @@ function love.keypressed(key)
                 end
             end
             if not occupied then
-                table.insert(agents, Agent.new(cx, cy))
+                table.insert(agents, Agent.new(cx, cy, "miner"))
             end
         end
     end
@@ -304,14 +298,10 @@ function love.mousepressed(x, y, button)
     if cx >= 1 and cx <= cols and cy >= 1 and cy <= rows then
         if selectedTool == "erase" then
             grid[cx][cy] = 0
-            for i = #resourceNodes, 1, -1 do
-                if resourceNodes[i].x == cx and resourceNodes[i].y == cy then
-                    table.remove(resourceNodes, i)
-                end
-            end
-            for i = #boxNodes, 1, -1 do
-                if boxNodes[i].x == cx and boxNodes[i].y == cy then
-                    table.remove(boxNodes, i)
+            for i = #interactables, 1, -1 do
+                local item = interactables[i]
+                if item.x == cx and item.y == cy then
+                    table.remove(interactables, i)
                 end
             end
             return
@@ -319,14 +309,8 @@ function love.mousepressed(x, y, button)
 
         if selectedTool == "resource" then
             local occupied = false
-            for _, node in ipairs(resourceNodes) do
-                if node.x == cx and node.y == cy then
-                    occupied = true
-                    break
-                end
-            end
-            for _, box in ipairs(boxNodes) do
-                if box.x == cx and box.y == cy then
+            for _, item in ipairs(interactables) do
+                if item.x == cx and item.y == cy then
                     occupied = true
                     break
                 end
@@ -338,18 +322,16 @@ function love.mousepressed(x, y, button)
                 end
             end
             if not occupied then
-                table.insert(resourceNodes, { x = cx, y = cy, remaining = 5, type = "resource" })
+                table.insert(interactables, Interactable.new("mine", cx, cy, {
+                    allowedRoles = { "miner" },
+                    resourceLeft = 5,
+                    interactionTime = 1.5,
+                }))
             end
         elseif selectedTool == "box" then
             local occupied = false
-            for _, node in ipairs(resourceNodes) do
-                if node.x == cx and node.y == cy then
-                    occupied = true
-                    break
-                end
-            end
-            for _, box in ipairs(boxNodes) do
-                if box.x == cx and box.y == cy then
+            for _, item in ipairs(interactables) do
+                if item.x == cx and item.y == cy then
                     occupied = true
                     break
                 end
@@ -361,7 +343,12 @@ function love.mousepressed(x, y, button)
                 end
             end
             if not occupied then
-                table.insert(boxNodes, { x = cx, y = cy, amount = 0, capacity = 10, type = "box" })
+                table.insert(interactables, Interactable.new("storage", cx, cy, {
+                    allowedRoles = { "miner" },
+                    capacity = 10,
+                    amount = 0,
+                    interactionTime = 1.0,
+                }))
             end
         end
     end
@@ -371,26 +358,17 @@ function love.draw()
     for x = 1, cols do
         for y = 1, rows do
             local px, py = (x - 1) * cellSize, (y - 1) * cellSize
-            local isResource = false
-            local isBox = false
+            local isInteractable = false
 
-            for _, node in ipairs(resourceNodes) do
-                if node.x == x and node.y == y then
-                    isResource = true
-                    break
-                end
-            end
-            for _, box in ipairs(boxNodes) do
-                if box.x == x and box.y == y then
-                    isBox = true
+            for _, item in ipairs(interactables) do
+                if item.x == x and item.y == y then
+                    isInteractable = true
                     break
                 end
             end
 
-            if isResource then
-                love.graphics.setColor(1, 0.8, 0.1)
-            elseif isBox then
-                love.graphics.setColor(0.2, 0.7, 1)
+            if isInteractable then
+                love.graphics.setColor(0.25, 0.25, 0.25)
             elseif grid[x][y] == 1 then
                 love.graphics.setColor(0.3, 0.3, 0.3)
             else
@@ -401,12 +379,17 @@ function love.draw()
         end
     end
 
-    for _, box in ipairs(boxNodes) do
-        local pct = math.floor((box.amount / math.max(1, box.capacity)) * 100)
-        local px = (box.x - 1) * cellSize + 2
-        local py = (box.y - 1) * cellSize - 14
+    for _, item in ipairs(interactables) do
+        local px = (item.x - 1) * cellSize + 2
+        local py = (item.y - 1) * cellSize - 14
         love.graphics.setColor(1, 1, 1)
-        love.graphics.print(string.format("[%d%%]", pct), px, py)
+        if item.kind == "mine" then
+            love.graphics.print(string.format("M:%d", item.resourceLeft or 0), px, py)
+        elseif item.kind == "storage" then
+            love.graphics.print(string.format("S:%d", item.amount or 0), px, py)
+        else
+            love.graphics.print(item.kind, px, py)
+        end
     end
 
     love.graphics.setColor(0.12, 0.12, 0.18, 0.9)
