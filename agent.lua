@@ -222,6 +222,30 @@ local function nearestInteractable(agent, interactables, predicate)
     return best
 end
 
+local function getTaskTile(target, fromX, fromY)
+    if not target then return nil end
+    if target.getNearestWorkTileFrom and type(target.getNearestWorkTileFrom) == "function" then
+        local tile = target:getNearestWorkTileFrom(fromX, fromY)
+        if tile then
+            return tile
+        end
+    end
+
+    if target.isLegalWorkPosition and type(target.isLegalWorkPosition) == "function" then
+        local legal = nil
+        for _, tile in ipairs(target:getWorkTiles and target:getWorkTiles() or {}) do
+            if tile and tile.x and tile.y then
+                if not legal or (manhattan(fromX, fromY, tile.x, tile.y) < manhattan(fromX, fromY, legal.x, legal.y)) then
+                    legal = tile
+                end
+            end
+        end
+        if legal then return legal end
+    end
+
+    return { x = target.x, y = target.y }
+end
+
 function Agent.new(x, y, role)
     local self = setmetatable({}, Agent)
     self.x = math.floor(x or 1)
@@ -325,7 +349,10 @@ function Agent:update(dt, cols, rows, grid, interactables, allAgents)
         return
     end
 
-    if self.x == target.x and self.y == target.y then
+    local interactionTile = getTaskTile(target, self.x, self.y)
+    self.currentTask.workTile = interactionTile
+
+    if self.x == interactionTile.x and self.y == interactionTile.y then
         self.statusText = self.currentTask.label
         self.harvestTimer = self.harvestTimer + dt
 
@@ -362,7 +389,7 @@ function Agent:update(dt, cols, rows, grid, interactables, allAgents)
 
     self.statusText = self.currentTask.label
     if not self.path or #self.path == 0 then
-        self.path = findPath(grid, cols, rows, self.x, self.y, target.x, target.y)
+        self.path = findPath(grid, cols, rows, self.x, self.y, interactionTile.x, interactionTile.y)
         if not self.path or #self.path == 0 then
             self.statusText = "Blocked"
             self.path = nil
