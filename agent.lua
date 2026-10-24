@@ -165,8 +165,11 @@ local function buildReservationMap(agents, ignoreAgent)
     if not agents then return reservations end
 
     for _, other in ipairs(agents) do
-        if other ~= ignoreAgent and other.x and other.y then
-            reservations[cellKey(other.x, other.y)] = true
+        if other ~= ignoreAgent then
+            local reservedCell = other._reservedCell or { x = other.x, y = other.y }
+            if reservedCell and reservedCell.x and reservedCell.y then
+                reservations[cellKey(reservedCell.x, reservedCell.y)] = true
+            end
         end
     end
 
@@ -201,7 +204,25 @@ local function findBestAlternativeStep(agent, grid, cols, rows, goalX, goalY, re
     return best
 end
 
-function Agent.new(x, y)
+local function nearestInteractable(agent, interactables, predicate)
+    if not interactables or #interactables == 0 then return nil end
+
+    local best = nil
+    local bestDist = math.huge
+    for _, node in ipairs(interactables) do
+        if node and predicate(node) then
+            local d = manhattan(agent.x, agent.y, node.x, node.y)
+            if d < bestDist then
+                bestDist = d
+                best = node
+            end
+        end
+    end
+
+    return best
+end
+
+function Agent.new(x, y, role)
     local self = setmetatable({}, Agent)
     self.x = math.floor(x or 1)
     self.y = math.floor(y or 1)
@@ -209,7 +230,12 @@ function Agent.new(x, y)
     self.renderY = self.y - 0.5
     self.targetRenderX = self.renderX
     self.targetRenderY = self.renderY
+    self._reservedCell = { x = self.x, y = self.y }
 
+    self.role = role or "miner"
+    self.taskQueue = {}
+    self.currentTask = nil
+    self.currentGoal = nil
     self.worldState = {
         knowsLocation = false,
         atResource = false,
@@ -230,89 +256,113 @@ function Agent.new(x, y)
     return self
 end
 
-function Agent:update(dt, cols, rows, grid, resourceNodes, boxNodes, allAgents)
+function Agent:setTask(task)
+    self.currentTask = task
+    self.targetNode = task and task.target or nil
+    self.statusText = task and task.label or "Idle"
+end
+
+function Agent:chooseTask(interactables)
+    if not interactables then return nil end
+
+    local function mineReady(node)
+        return node.kind == "mine" and node:canInteract(self) and (node.resourceLeft == nil or node.resourceLeft > 0) and not node.claimedBy
+    end
+
+    local function storageReady(node)
+        return node.kind == "storage" and node:canInteract(self) and (node.capacity == nil or (node.amount or 0) < node.capacity)
+    end
+
+    if self.role == "miner" then
+        if self.resourceHeld then
+            local storage = nearestInteractable(self, interactables, storageReady)
+            if storage then
+                self:setTask({ type = "deliver", label = "Delivering", target = storage, kind = "storage" })
+                return self.currentTask
+            end
+        else
+            local mine = nearestInteractable(self, interactables, mineReady)
+            if mine then
+                mine:claim(self)
+                self:setTask({ type = "mine", label = "Mining", target = mine, kind = "mine" })
+                return self.currentTask
+            end
+        end
+    end
+
+    return nil
+end
+
+function Agent:update(dt, cols, rows, grid, interactables, allAgents)
     dt = dt or 0.016
     self.crowdCooldown = math.max(0, self.crowdCooldown - dt)
 
     self.renderX = self.renderX + (self.targetRenderX - self.renderX) * math.min(1, dt * 12)
     self.renderY = self.renderY + (self.targetRenderY - self.renderY) * math.min(1, dt * 12)
 
-    if not self.resourceHeld then
-        if not self.targetNode or self.targetNode.type ~= "resource" then
-            self.targetNode = nearestAvailableNode(self.x, self.y, resourceNodes, function(node)
-                return not node.remaining or node.remaining > 0
-            end)
-        end
+    if not self.currentTask then
+        self:chooseTask(interactables)
+    end
 
-        if not self.targetNode then
-            self.statusText = "Need resource"
-            self.path = nil
-            return
-        end
+    if not self.currentTask then
+        self.statusText = "Idle"
+        self.path = nil
+        self._reservedCell = { x = self.x, y = self.y }
+        return
+    end
 
-        if self.x == self.targetNode.x and self.y == self.targetNode.y then
-            self.statusText = "Mining"
-            self.harvestTimer = self.harvestTimer + dt
-            if self.harvestTimer >= self.requiredHarvestTime then
-                if self.targetNode.remaining ~= nil then
-                    self.targetNode.remaining = self.targetNode.remaining - 1
-                end
+    local target = self.currentTask.target
+    if not target or not target.enabled then
+        self.currentTask = nil
+        self.path = nil
+        self._reservedCell = { x = self.x, y = self.y }
+        return
+    end
+
+    if self.x == target.x and self.y == target.y then
+        self.statusText = self.currentTask.label
+        self.harvestTimer = self.harvestTimer + dt
+
+        if self.currentTask.type == "mine" then
+            if target:work(self, dt) then
                 self.resourceHeld = true
-                self.harvestTimer = 0
                 self.statusText = "Holding resource"
-                self.targetNode = nil
+                target:release()
+                self.currentTask = nil
                 self.path = nil
+                self.harvestTimer = 0
+                self._reservedCell = { x = self.x, y = self.y }
+                return
             end
+            self._reservedCell = { x = self.x, y = self.y }
             return
         end
 
-        self.statusText = "Gathering"
+        if self.currentTask.type == "deliver" then
+            if target:work(self, dt) then
+                self.resourceHeld = false
+                self.statusText = "Delivered"
+                target:release()
+                self.currentTask = nil
+                self.path = nil
+                self.harvestTimer = 0
+                self._reservedCell = { x = self.x, y = self.y }
+                return
+            end
+            self._reservedCell = { x = self.x, y = self.y }
+            return
+        end
+    end
+
+    self.statusText = self.currentTask.label
+    if not self.path or #self.path == 0 then
+        self.path = findPath(grid, cols, rows, self.x, self.y, target.x, target.y)
         if not self.path or #self.path == 0 then
-            self.path = findPath(grid, cols, rows, self.x, self.y, self.targetNode.x, self.targetNode.y)
-            if not self.path or #self.path == 0 then
-                self.statusText = "Blocked"
-                self.path = nil
-                return
-            end
-        end
-    else
-        if not self.targetNode or self.targetNode.type ~= "box" then
-            self.targetNode = nearestAvailableNode(self.x, self.y, boxNodes, function(node)
-                return (node.amount or 0) < (node.capacity or 999999)
-            end)
-        end
-
-        if not self.targetNode then
-            self.statusText = "Need box"
+            self.statusText = "Blocked"
             self.path = nil
+            self.currentTask = nil
+            self._reservedCell = { x = self.x, y = self.y }
             return
-        end
-
-        if self.x == self.targetNode.x and self.y == self.targetNode.y then
-            if (self.targetNode.amount or 0) >= (self.targetNode.capacity or 0) then
-                self.statusText = "Box full"
-                self.path = nil
-                self.targetNode = nil
-                return
-            end
-
-            self.targetNode.amount = (self.targetNode.amount or 0) + 1
-            self.resourceHeld = false
-            self.statusText = "Delivered"
-            self.targetNode = nil
-            self.path = nil
-            self.harvestTimer = 0
-            return
-        end
-
-        self.statusText = "Delivering"
-        if not self.path or #self.path == 0 then
-            self.path = findPath(grid, cols, rows, self.x, self.y, self.targetNode.x, self.targetNode.y)
-            if not self.path or #self.path == 0 then
-                self.statusText = "Blocked"
-                self.path = nil
-                return
-            end
         end
     end
 
@@ -330,23 +380,26 @@ function Agent:update(dt, cols, rows, grid, resourceNodes, boxNodes, allAgents)
             self.y = nextCell.y
             self.targetRenderX = self.x - 0.5
             self.targetRenderY = self.y - 0.5
+            self._reservedCell = { x = self.x, y = self.y }
             reservations = buildReservationMap(allAgents, self)
         else
             local goalX = self.targetNode and self.targetNode.x or self.x
             local goalY = self.targetNode and self.targetNode.y or self.y
             local alternative = findBestAlternativeStep(self, grid, cols, rows, goalX, goalY, reservations)
 
-            if alternative and isWalkable(grid, cols, rows, alternative.x, alternative.y) then
+            if alternative and isWalkable(grid, cols, rows, alternative.x, alternative.y) and not reservations[cellKey(alternative.x, alternative.y)] then
                 self.x = alternative.x
                 self.y = alternative.y
                 self.targetRenderX = self.x - 0.5
                 self.targetRenderY = self.y - 0.5
                 self.statusText = "Making space"
+                self._reservedCell = { x = self.x, y = self.y }
                 reservations = buildReservationMap(allAgents, self)
             else
                 self.path = nil
                 self.statusText = "Yielding"
                 self.crowdCooldown = 0.25
+                self._reservedCell = { x = self.x, y = self.y }
                 break
             end
         end

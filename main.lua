@@ -128,7 +128,7 @@ function love.load()
     interactables = {
         Interactable.new("mine", 30, 15, { allowedRoles = { "miner" }, resourceLeft = 5, interactionTime = 1.5 }),
         Interactable.new("mine", 27, 20, { allowedRoles = { "miner" }, resourceLeft = 5, interactionTime = 1.5 }),
-        Interactable.new("storage", 20, 15, { allowedRoles = { "miner" }, capacity = 10, amount = 0, interactionTime = 1.0 }),
+        Interactable.new("box", 20, 15, { allowedRoles = { "miner" }, capacity = 10, amount = 0, interactionTime = 1.0 }),
     }
 
     agents = {}
@@ -222,7 +222,7 @@ function love.update(dt)
                     end
                 end
                 if not occupied then
-                    table.insert(interactables, Interactable.new("storage", cx, cy, {
+                    table.insert(interactables, Interactable.new("box", cx, cy, {
                         allowedRoles = { "miner" },
                         capacity = 10,
                         amount = 0,
@@ -343,7 +343,7 @@ function love.mousepressed(x, y, button)
                 end
             end
             if not occupied then
-                table.insert(interactables, Interactable.new("storage", cx, cy, {
+                table.insert(interactables, Interactable.new("box", cx, cy, {
                     allowedRoles = { "miner" },
                     capacity = 10,
                     amount = 0,
@@ -383,10 +383,19 @@ function love.draw()
         local px = (item.x - 1) * cellSize + 2
         local py = (item.y - 1) * cellSize - 14
         love.graphics.setColor(1, 1, 1)
+
         if item.kind == "mine" then
-            love.graphics.print(string.format("M:%d", item.resourceLeft or 0), px, py)
-        elseif item.kind == "storage" then
-            love.graphics.print(string.format("S:%d", item.amount or 0), px, py)
+            local percent = 0
+            if item.resourceLeft and item.resourceLeft > 0 then
+                local total = 5
+                percent = math.floor((item.resourceLeft / total) * 100)
+            end
+            love.graphics.print(string.format("Mine:%d%%", percent), px, py)
+        elseif item.kind == "box" then
+            local total = item.capacity or 1
+            local used = item.amount or 0
+            local percent = math.floor((used / total) * 100)
+            love.graphics.print(string.format("Box:%d%%", percent), px, py)
         else
             love.graphics.print(item.kind, px, py)
         end
