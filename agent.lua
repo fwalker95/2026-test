@@ -43,6 +43,19 @@ local function cellKey(x, y)
     return tostring(x) .. "," .. tostring(y)
 end
 
+local function isOccupiedByAgent(agents, ignoreAgent, x, y)
+    if not agents then return false end
+    if not x or not y then return true end
+
+    for _, other in ipairs(agents) do
+        if other ~= ignoreAgent and other.x == x and other.y == y then
+            return true
+        end
+    end
+
+    return false
+end
+
 local function isWalkable(grid, cols, rows, x, y)
     if not x or not y then return false end
     if x < 1 or x > cols or y < 1 or y > rows then return false end
@@ -176,7 +189,7 @@ local function buildReservationMap(agents, ignoreAgent)
     return reservations
 end
 
-local function findBestAlternativeStep(agent, grid, cols, rows, goalX, goalY, reservations)
+local function findBestAlternativeStep(agent, grid, cols, rows, goalX, goalY, reservations, allAgents)
     local best = nil
     local bestScore = math.huge
     local options = {
@@ -191,7 +204,7 @@ local function findBestAlternativeStep(agent, grid, cols, rows, goalX, goalY, re
         local nx, ny = agent.x + dir[1], agent.y + dir[2]
         local key = cellKey(nx, ny)
 
-        if isWalkable(grid, cols, rows, nx, ny) and not reservations[key] then
+        if isWalkable(grid, cols, rows, nx, ny) and not reservations[key] and not isOccupiedByAgent(allAgents, agent, nx, ny) then
             local score = manhattan(nx, ny, goalX, goalY)
             score = score + (math.abs(nx - agent.x) + math.abs(ny - agent.y)) * 0.85
             if score < bestScore then
@@ -224,20 +237,13 @@ end
 
 local function findBestLegalWorkTile(agent, target, grid, cols, rows, reservations)
     if not target then return nil end
-
-    local tiles = {}
-    if target.getWorkTiles then
-        tiles = target:getWorkTiles()
-    elseif target.x and target.y then
-        tiles = { { x = target.x, y = target.y } }
-    end
-
+    local tiles = target:getWorkTiles and target:getWorkTiles() or { { x = target.x, y = target.y } }
     local best = nil
     local bestScore = math.huge
 
     for _, tile in ipairs(tiles) do
+        local key = cellKey(tile.x, tile.y)
         if tile and tile.x and tile.y and (tile.x ~= target.x or tile.y ~= target.y) then
-            local key = cellKey(tile.x, tile.y)
             if isWalkable(grid, cols, rows, tile.x, tile.y) and not reservations[key] then
                 local score = manhattan(agent.x, agent.y, tile.x, tile.y)
                 score = score + manhattan(tile.x, tile.y, target.x, target.y) * 0.25
@@ -286,6 +292,9 @@ function Agent.new(x, y, role)
     self.requiredHarvestTime = 2.0
     self.resourceHeld = false
     self.crowdCooldown = 0
+    self.wanderTarget = nil
+    self.chatPartner = nil
+    self.chatTimer = 0
 
     return self
 end
@@ -330,6 +339,64 @@ function Agent:chooseTask(interactables)
     return nil
 end
 
+function Agent:pickWanderTarget(grid, cols, rows, allAgents)
+    local candidates = {}
+    for x = -5, 5 do
+        for y = -5, 5 do
+            if math.abs(x) + math.abs(y) > 0 and math.abs(x) + math.abs(y) <= 6 then
+                local nx = self.x + x
+                local ny = self.y + y
+                if isWalkable(grid, cols, rows, nx, ny) and not isOccupiedByAgent(allAgents, self, nx, ny) then
+                    table.insert(candidates, { x = nx, y = ny })
+                end
+            end
+        end
+    end
+
+    if #candidates == 0 then
+        self.wanderTarget = nil
+        return nil
+    end
+
+    local target = candidates[math.random(1, #candidates)]
+    self.wanderTarget = target
+    return target
+end
+
+function Agent:tryChat(allAgents)
+    if self.chatTimer > 0 then
+        self.chatTimer = self.chatTimer - 0.1
+        if self.chatTimer <= 0 then
+            self.chatPartner = nil
+        end
+        return true
+    end
+
+    local bestPartner = nil
+    local bestDist = math.huge
+    for _, other in ipairs(allAgents or {}) do
+        if other ~= self then
+            local d = manhattan(self.x, self.y, other.x, other.y)
+            if d <= 2 and (other.statusText == "Wandering" or other.statusText == "Chatting") then
+                if d < bestDist then
+                    bestDist = d
+                    bestPartner = other
+                end
+            end
+        end
+    end
+
+    if bestPartner then
+        self.chatPartner = bestPartner
+        self.chatTimer = 2.0
+        self.statusText = "Chatting"
+        return true
+    end
+
+    self.chatPartner = nil
+    return false
+end
+
 function Agent:update(dt, cols, rows, grid, interactables, allAgents)
     dt = dt or 0.016
     self.crowdCooldown = math.max(0, self.crowdCooldown - dt)
@@ -337,8 +404,23 @@ function Agent:update(dt, cols, rows, grid, interactables, allAgents)
     self.renderX = self.renderX + (self.targetRenderX - self.renderX) * math.min(1, dt * 12)
     self.renderY = self.renderY + (self.targetRenderY - self.renderY) * math.min(1, dt * 12)
 
+    if self.chatTimer > 0 then
+        self.chatTimer = math.max(0, self.chatTimer - dt)
+        if self.chatTimer == 0 then
+            self.chatPartner = nil
+        end
+    end
+
     if not self.currentTask then
         self:chooseTask(interactables)
+        if not self.currentTask then
+            if not self.wanderTarget or (self.x == self.wanderTarget.x and self.y == self.wanderTarget.y) then
+                self:pickWanderTarget(grid, cols, rows, allAgents)
+            end
+            if self.wanderTarget then
+                self:setTask({ type = "wander", label = "Wandering", target = { x = self.wanderTarget.x, y = self.wanderTarget.y, enabled = true } })
+            end
+        end
     end
 
     if not self.currentTask then
@@ -358,6 +440,21 @@ function Agent:update(dt, cols, rows, grid, interactables, allAgents)
     end
 
     if self.x == target.x and self.y == target.y then
+        if self.currentTask.type == "wander" then
+            self.wanderTarget = nil
+            self.chatPartner = nil
+            self.statusText = "Chatting"
+            self.chatTimer = 1.2
+            self.currentTask = nil
+            self.targetNode = nil
+            self.path = nil
+            self._reservedCell = { x = self.x, y = self.y }
+            if self:tryChat(allAgents) then
+                self.statusText = "Chatting"
+            end
+            return
+        end
+
         self.statusText = "Blocked"
         self.currentTask = nil
         self.targetNode = nil
@@ -383,7 +480,7 @@ function Agent:update(dt, cols, rows, grid, interactables, allAgents)
         return
     end
 
-    if target:isLegalWorkPosition(workTile.x, workTile.y) then
+    if target:isLegalWorkPosition and target:isLegalWorkPosition(workTile.x, workTile.y) then
         if self.x == workTile.x and self.y == workTile.y then
             self.statusText = self.currentTask.label
             self.harvestTimer = self.harvestTimer + dt
@@ -398,6 +495,7 @@ function Agent:update(dt, cols, rows, grid, interactables, allAgents)
                     self.path = nil
                     self.harvestTimer = 0
                     self._reservedCell = { x = self.x, y = self.y }
+                    self.wanderTarget = nil
                     return
                 end
                 self._reservedCell = { x = self.x, y = self.y }
@@ -414,6 +512,7 @@ function Agent:update(dt, cols, rows, grid, interactables, allAgents)
                     self.path = nil
                     self.harvestTimer = 0
                     self._reservedCell = { x = self.x, y = self.y }
+                    self.wanderTarget = nil
                     return
                 end
                 self._reservedCell = { x = self.x, y = self.y }
@@ -446,7 +545,7 @@ function Agent:update(dt, cols, rows, grid, interactables, allAgents)
         local nextCell = table.remove(self.path, 1)
         local nextKey = cellKey(nextCell.x, nextCell.y)
 
-        if isWalkable(grid, cols, rows, nextCell.x, nextCell.y) and not reservations[nextKey] then
+        if isWalkable(grid, cols, rows, nextCell.x, nextCell.y) and not reservations[nextKey] and not isOccupiedByAgent(allAgents, self, nextCell.x, nextCell.y) then
             self.x = nextCell.x
             self.y = nextCell.y
             self.targetRenderX = self.x - 0.5
@@ -456,9 +555,9 @@ function Agent:update(dt, cols, rows, grid, interactables, allAgents)
         else
             local goalX = workTile and workTile.x or self.x
             local goalY = workTile and workTile.y or self.y
-            local alternative = findBestAlternativeStep(self, grid, cols, rows, goalX, goalY, reservations)
+            local alternative = findBestAlternativeStep(self, grid, cols, rows, goalX, goalY, reservations, allAgents)
 
-            if alternative and isWalkable(grid, cols, rows, alternative.x, alternative.y) and not reservations[cellKey(alternative.x, alternative.y)] then
+            if alternative and isWalkable(grid, cols, rows, alternative.x, alternative.y) and not reservations[cellKey(alternative.x, alternative.y)] and not isOccupiedByAgent(allAgents, self, alternative.x, alternative.y) then
                 self.x = alternative.x
                 self.y = alternative.y
                 self.targetRenderX = self.x - 0.5
@@ -474,6 +573,10 @@ function Agent:update(dt, cols, rows, grid, interactables, allAgents)
                 break
             end
         end
+    end
+
+    if self.currentTask and self.currentTask.type == "wander" then
+        self:tryChat(allAgents)
     end
 end
 
