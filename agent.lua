@@ -51,7 +51,7 @@ local function isWalkable(grid, cols, rows, x, y)
     return true
 end
 
-local function nearestNodeFromList(x, y, nodes)
+local function nearestAvailableNode(x, y, nodes, predicate)
     if not nodes or #nodes == 0 then
         return nil
     end
@@ -59,10 +59,12 @@ local function nearestNodeFromList(x, y, nodes)
     local bestNode = nil
     local bestDist = math.huge
     for _, node in ipairs(nodes) do
-        local d = manhattan(x, y, node.x, node.y)
-        if d < bestDist then
-            bestDist = d
-            bestNode = node
+        if (not predicate) or predicate(node) then
+            local d = manhattan(x, y, node.x, node.y)
+            if d < bestDist then
+                bestDist = d
+                bestNode = node
+            end
         end
     end
     return bestNode
@@ -183,7 +185,9 @@ function Agent:update(dt, cols, rows, grid, resourceNodes, boxNodes)
 
     if not self.resourceHeld then
         if not self.targetNode or self.targetNode.type ~= "resource" then
-            self.targetNode = nearestNodeFromList(self.x, self.y, resourceNodes)
+            self.targetNode = nearestAvailableNode(self.x, self.y, resourceNodes, function(node)
+                return not node.remaining or node.remaining > 0
+            end)
         end
 
         if not self.targetNode then
@@ -196,6 +200,9 @@ function Agent:update(dt, cols, rows, grid, resourceNodes, boxNodes)
             self.statusText = "Mining"
             self.harvestTimer = self.harvestTimer + dt
             if self.harvestTimer >= self.requiredHarvestTime then
+                if self.targetNode.remaining ~= nil then
+                    self.targetNode.remaining = self.targetNode.remaining - 1
+                end
                 self.resourceHeld = true
                 self.harvestTimer = 0
                 self.statusText = "Holding resource"
@@ -216,7 +223,9 @@ function Agent:update(dt, cols, rows, grid, resourceNodes, boxNodes)
         end
     else
         if not self.targetNode or self.targetNode.type ~= "box" then
-            self.targetNode = nearestNodeFromList(self.x, self.y, boxNodes)
+            self.targetNode = nearestAvailableNode(self.x, self.y, boxNodes, function(node)
+                return (node.amount or 0) < (node.capacity or 999999)
+            end)
         end
 
         if not self.targetNode then
@@ -226,6 +235,14 @@ function Agent:update(dt, cols, rows, grid, resourceNodes, boxNodes)
         end
 
         if self.x == self.targetNode.x and self.y == self.targetNode.y then
+            if (self.targetNode.amount or 0) >= (self.targetNode.capacity or 0) then
+                self.statusText = "Box full"
+                self.path = nil
+                self.targetNode = nil
+                return
+            end
+
+            self.targetNode.amount = (self.targetNode.amount or 0) + 1
             self.resourceHeld = false
             self.statusText = "Delivered"
             self.targetNode = nil
