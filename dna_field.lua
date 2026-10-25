@@ -24,6 +24,7 @@ function DNAField.new(cols, rows, seed)
     self.extractSuccesses = 0
     self.totalRemoved = 0
     self.exhausted = false
+    self.highlight = nil -- { kind = "row"|"column", index = N }
     self:generate()
     return self
 end
@@ -74,20 +75,31 @@ function DNAField:generate()
     self.cells = cells
 end
 
--- extract bases from a chosen row or column into a useful sequence string.
--- returns extracted sequence or nil.
-function DNAField:extractLine(kind, index, maxBases)
+function DNAField:setHighlight(kind, index)
+    if not kind or not index then
+        self.highlight = nil
+        return
+    end
+    self.highlight = { kind = kind, index = index }
+end
+
+function DNAField:clearHighlight()
+    self.highlight = nil
+end
+
+-- delete full row/column and return extracted sequence string from removed bases.
+function DNAField:deleteLine(kind, index)
     if self.exhausted then return nil end
 
-    local picked = {}
-    local quota = math.max(1, maxBases or 1)
+    local out = {}
 
     if kind == "row" then
         local y = math.max(1, math.min(self.rows, index or 1))
         for x = 1, self.cols do
             local c = self.cells[x][y]
             if c and not c.destroyed then
-                picked[#picked + 1] = { x = x, y = y, c = c }
+                out[#out + 1] = c.letter
+                self.cells[x][y] = nil
             end
         end
     else
@@ -95,41 +107,22 @@ function DNAField:extractLine(kind, index, maxBases)
         for y = 1, self.rows do
             local c = self.cells[x][y]
             if c and not c.destroyed then
-                picked[#picked + 1] = { x = x, y = y, c = c }
+                out[#out + 1] = c.letter
+                self.cells[x][y] = nil
             end
         end
-    end
-
-    if #picked == 0 then
-        self.lastLog = string.format("%s %d contained no extractable sequence", kind == "row" and "Row" or "Column", index or 1)
-        self:checkExhausted()
-        return nil
-    end
-
-    -- shuffle and remove up to quota
-    for i = #picked, 2, -1 do
-        local j = self.rng:random(1, i)
-        picked[i], picked[j] = picked[j], picked[i]
-    end
-
-    local take = math.min(#picked, quota)
-    local out = {}
-    for i = 1, take do
-        local p = picked[i]
-        out[#out + 1] = p.c.letter
-        self.cells[p.x][p.y] = nil
     end
 
     local seq = table.concat(out)
     if #seq > 0 then
         self.totalRemoved = self.totalRemoved + #seq
-        self.lastLog = string.format("Extracted %d bases from %s %d", #seq, kind, index or 1)
-        self:checkExhausted()
-        return seq
+        self.lastLog = string.format("Deleted %s %d, removed %d bases", kind, index or 1, #seq)
+    else
+        self.lastLog = string.format("Deleted %s %d, but it was empty", kind, index or 1)
     end
 
     self:checkExhausted()
-    return nil
+    return seq
 end
 
 function DNAField:countAvailable()
@@ -185,6 +178,18 @@ function DNAField:draw(x, y, w, h)
     love.graphics.setColor(0.02, 0.03, 0.05, 1)
     love.graphics.rectangle("fill", ox, oy, fw, fh)
 
+    -- white row/column highlight during scientist lookup
+    if self.highlight then
+        love.graphics.setColor(1, 1, 1, 0.12)
+        if self.highlight.kind == "row" then
+            local y1 = oy + (self.highlight.index - 1) * cs
+            love.graphics.rectangle("fill", ox, y1, fw, cs)
+        else
+            local x1 = ox + (self.highlight.index - 1) * cs
+            love.graphics.rectangle("fill", x1, oy, cs, fh)
+        end
+    end
+
     local font = love.graphics.getFont()
     local scale = math.max(0.5, (cs * 0.7) / font:getHeight())
 
@@ -204,6 +209,20 @@ function DNAField:draw(x, y, w, h)
                 love.graphics.print(c.letter, px + (cs - tw) / 2, py + (cs - th) / 2, 0, scale, scale)
             end
         end
+    end
+
+    -- bright outline over highlighted line
+    if self.highlight then
+        love.graphics.setColor(1, 1, 1, 0.85)
+        love.graphics.setLineWidth(2)
+        if self.highlight.kind == "row" then
+            local y1 = oy + (self.highlight.index - 1) * cs
+            love.graphics.rectangle("line", ox, y1, fw, cs)
+        else
+            local x1 = ox + (self.highlight.index - 1) * cs
+            love.graphics.rectangle("line", x1, oy, cs, fh)
+        end
+        love.graphics.setLineWidth(1)
     end
 
     love.graphics.setColor(0.2, 0.4, 0.6, 1)
