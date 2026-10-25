@@ -43,6 +43,12 @@ function AI.chooseTask(agent, interactables)
         return (node.amount or 0) < node.capacity
     end
 
+    local function biomassBoxReady(node)
+        if not node or (node.kind ~= "box" and node.kind ~= "storage") then return false end
+        if not node:canInteract(agent) then return false end
+        return node.contents ~= nil and (node.contents.biomass or 0) > 0
+    end
+
     local function labReady(node)
         if not node or node.kind ~= "lab" then return false end
         if not node:canInteract(agent) then return false end
@@ -63,9 +69,22 @@ function AI.chooseTask(agent, interactables)
         end
 
     elseif agent.role == "scientist" then
-        local lab = nearestInteractable(agent, interactables, labReady)
-        if lab and lab:claim(agent) then
-            return { type = "research", label = "Researching", target = lab, kind = "lab" }
+        if agent.hasBiomass then
+            -- carrying biomass: go work a lab
+            local lab = nearestInteractable(agent, interactables, labReady)
+            if lab and lab:claim(agent) then
+                return { type = "research", label = "Researching", target = lab, kind = "lab" }
+            end
+        else
+            -- need 1 biomass from a stored chest first (only if a lab exists to use it)
+            local labExists = nearestInteractable(agent, interactables, labReady)
+            if labExists then
+                local box = nearestInteractable(agent, interactables, biomassBoxReady)
+                if box then
+                    -- boxes are not claimed for fetching so miners can still deliver
+                    return { type = "fetch", label = "Fetching biomass", target = box, kind = box.kind }
+                end
+            end
         end
     end
 

@@ -5,8 +5,12 @@ local Camera = require("camera")
 local Resources = require("resources")
 local AssetManager = require("asset_manager")
 local LabSphere = require("lab_sphere")
+local DNAField = require("dna_field")
 
 local kindImageKeys = { mine = "resource", box = "box", lab = "lab" }
+
+-- boxes can be used by miners (deliver) and scientists (take biomass)
+local BOX_ROLES = { "miner", "scientist" }
 
 local function drawImageInCell(image, px, py, size)
     love.graphics.setColor(1, 1, 1)
@@ -115,8 +119,8 @@ function AgentListMenu:new(x, y, w)
 
         for i, agent in ipairs(agents) do
             local status = agent.statusText or "Idle"
-            local holding = agent.resourceHeld and "yes" or "no"
-            local carried = agent.carriedType or "none"
+            local holding = (agent.resourceHeld or agent.hasBiomass) and "yes" or "no"
+            local carried = agent.carriedType or (agent.hasBiomass and "biomass") or "none"
             local label = string.format("%d [%s]: (%d,%d) %s hold=%s carry=%s", i, agent.role, agent.x, agent.y, status, holding, carried)
             table.insert(self.items, { label = label, callback = function() end })
         end
@@ -184,7 +188,7 @@ local function placeAt(cx, cy, pressed)
         }))
     elseif selectedTool == "box" then
         table.insert(interactables, Interactable.new("box", cx, cy, {
-            allowedRoles = { "miner" },
+            allowedRoles = BOX_ROLES,
             capacity = 10,
             amount = 0,
             interactionTime = 1.0,
@@ -198,7 +202,7 @@ local function placeAt(cx, cy, pressed)
     resources:recount(interactables)
 end
 
--- Lab menu (full-window screen)
+-- Lab menu (full-window screen with tabs)
 local function closeLabMenu()
     labMenuOpen = false
     selectedLab = nil
@@ -207,11 +211,28 @@ end
 local function openLabMenu(lab)
     selectedLab = lab
     labMenuOpen = true
+    labTab = "overview"
 end
 
 local function labCloseButtonRect()
     local w = love.graphics.getWidth()
     return { x = w - 56, y = 16, w = 40, h = 40 }
+end
+
+local function labTabRects()
+    return {
+        overview = { x = 24, y = 90, w = 130, h = 32, label = "Overview" },
+        sequencer = { x = 164, y = 90, w = 150, h = 32, label = "Sequencer" },
+    }
+end
+
+local function labRegenRect()
+    local w = love.graphics.getWidth()
+    return { x = w - 190, y = 90, w = 166, h = 32 }
+end
+
+local function inRect(r, x, y)
+    return x >= r.x and x <= r.x + r.w and y >= r.y and y <= r.y + r.h
 end
 
 local function hitLabAtCell(cx, cy)
@@ -267,7 +288,7 @@ function love.load()
     interactables = {
         Interactable.new("mine", 30, 15, { allowedRoles = { "miner" }, resourceLeft = 5, interactionTime = 1.5, resourceType = "biomass" }),
         Interactable.new("mine", 27, 20, { allowedRoles = { "miner" }, resourceLeft = 5, interactionTime = 1.5, resourceType = "dna" }),
-        Interactable.new("box", 20, 15, { allowedRoles = { "miner" }, capacity = 10, amount = 0, interactionTime = 1.0 }),
+        Interactable.new("box", 20, 15, { allowedRoles = BOX_ROLES, capacity = 10, amount = 0, interactionTime = 1.0 }),
         Interactable.new("lab", 20, 22, { allowedRoles = { "scientist" }, interactionTime = 3.0 }),
     }
 
@@ -300,7 +321,9 @@ function love.load()
     placeMenu:addItem("Scientist", function() selectedTool = "agent_scientist" end, function() return selectedTool == "agent_scientist" end)
 
     labSphere = LabSphere.new({ baseColor = { 0.35, 0.75, 1.0 }, spinSpeed = 1.2, tilt = 0.4 })
+    dnaField = DNAField.new(40, 22)
     labMenuOpen = false
+    labTab = "overview"
     selectedLab = nil
 
     local worldW = cols * cellSize
@@ -309,7 +332,6 @@ function love.load()
 end
 
 function love.update(dt)
-    -- Lab screen takes over: only the sphere animates, the world is paused for input
     if labMenuOpen then
         labSphere:update(dt)
     else
@@ -337,7 +359,10 @@ end
 function love.keypressed(key)
     if labMenuOpen then
         if key == "escape" then closeLabMenu() end
-        if key == "n" then labSphere.showNormals = not labSphere.showNormals end
+        if key == "1" then labTab = "overview" end
+        if key == "2" then labTab = "sequencer" end
+        if key == "n" and labTab == "overview" then labSphere.showNormals = not labSphere.showNormals end
+        if key == "r" and labTab == "sequencer" then dnaField:generate() end
         return
     end
 
@@ -359,9 +384,16 @@ end
 function love.mousepressed(x, y, button)
     if labMenuOpen then
         if button == 1 then
-            local r = labCloseButtonRect()
-            if x >= r.x and x <= r.x + r.w and y >= r.y and y <= r.y + r.h then
+            if inRect(labCloseButtonRect(), x, y) then
                 closeLabMenu()
+                return
+            end
+            local tabs = labTabRects()
+            for name, r in pairs(tabs) do
+                if inRect(r, x, y) then labTab = name return end
+            end
+            if labTab == "sequencer" and inRect(labRegenRect(), x, y) then
+                dnaField:generate()
             end
         end
         return
@@ -387,8 +419,22 @@ function love.mousereleased(x, y, button)
     camera:mousereleased(x, y, button)
 end
 
+local function drawLabButton(r, label, active, hover)
+    if active then
+        love.graphics.setColor(0.25, 0.6, 0.9)
+    elseif hover then
+        love.graphics.setColor(0.25, 0.3, 0.4)
+    else
+        love.graphics.setColor(0.15, 0.18, 0.25)
+    end
+    love.graphics.rectangle("fill", r.x, r.y, r.w, r.h, 6, 6)
+    love.graphics.setColor(1, 1, 1)
+    love.graphics.print(label, r.x + 12, r.y + 9)
+end
+
 local function drawLabScreen()
     local W, H = love.graphics.getWidth(), love.graphics.getHeight()
+    local mx, my = love.mouse.getPosition()
 
     -- full-window background
     love.graphics.setColor(0.03, 0.05, 0.09, 1)
@@ -399,17 +445,45 @@ local function drawLabScreen()
     love.graphics.print("LAB", 24, 24, 0, 2, 2)
     if selectedLab then
         love.graphics.setColor(0.7, 0.85, 1.0)
-        love.graphics.print(string.format("Lab @ (%d,%d)", selectedLab.x, selectedLab.y), 24, 58)
+        love.graphics.print(string.format("Lab @ (%d,%d)   Research completed: %d", selectedLab.x, selectedLab.y, selectedLab.researchCount or 0), 24, 58)
     end
 
-    -- sphere centered in the window
-    local radius = math.floor(math.min(W, H) * 0.3)
-    labSphere:draw(W * 0.5, H * 0.5, radius)
+    -- tabs
+    for name, r in pairs(labTabRects()) do
+        drawLabButton(r, r.label, labTab == name, inRect(r, mx, my))
+    end
+
+    -- tab content
+    local contentY = 140
+    local contentH = H - contentY - 50
+
+    if labTab == "overview" then
+        local radius = math.floor(math.min(W, contentH) * 0.3)
+        labSphere:draw(W * 0.5, contentY + contentH * 0.5, radius)
+
+        love.graphics.setColor(0.7, 0.8, 0.9)
+        love.graphics.print("Scientists need 1 biomass from a stored chest to work this lab.", 24, contentY)
+        love.graphics.print(string.format("Biomass in storage: %d", resources:get("biomass")), 24, contentY + 22)
+    else
+        local rg = labRegenRect()
+        drawLabButton(rg, "Regenerate (R)", false, inRect(rg, mx, my))
+
+        dnaField:draw(24, contentY, W - 48, contentH)
+
+        local c = dnaField:counts()
+        local lx = 24
+        for _, l in ipairs(DNAField.letters) do
+            local col = DNAField.colors[l]
+            love.graphics.setColor(col[1], col[2], col[3])
+            local txt = string.format("%s: %d", l, c[l])
+            love.graphics.print(txt, lx, H - 28)
+            lx = lx + 90
+        end
+    end
 
     -- X close button (top-right)
     local r = labCloseButtonRect()
-    local mx, my = love.mouse.getPosition()
-    local hover = mx >= r.x and mx <= r.x + r.w and my >= r.y and my <= r.y + r.h
+    local hover = inRect(r, mx, my)
     love.graphics.setColor(hover and 0.9 or 0.65, hover and 0.2 or 0.15, hover and 0.2 or 0.15)
     love.graphics.rectangle("fill", r.x, r.y, r.w, r.h, 6, 6)
     love.graphics.setColor(1, 1, 1)
@@ -420,7 +494,7 @@ local function drawLabScreen()
 
     -- hints
     love.graphics.setColor(0.7, 0.8, 0.9)
-    love.graphics.print("N: toggle normal view    ESC or X: close", 24, H - 30)
+    love.graphics.print("1/2: tabs    N: normals (Overview)    R: regenerate (Sequencer)    ESC or X: close", 300, H - 28)
 end
 
 function love.draw()

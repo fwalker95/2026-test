@@ -33,6 +33,11 @@ function Interactable.new(kind, x, y, opts)
         self.contents = (opts and opts.contents) or {}
     end
 
+    -- Completed research cycles (labs)
+    if self.kind == "lab" then
+        self.researchCount = 0
+    end
+
     return self
 end
 
@@ -112,6 +117,16 @@ function Interactable:addItem(resourceKey, n)
     if not self.contents then return false end
     if not Resources.isValid(resourceKey) then return false end
     self.contents[resourceKey] = (self.contents[resourceKey] or 0) + (n or 1)
+    return true
+end
+
+-- Take items out of this box. Returns true only if enough were available.
+function Interactable:removeItem(resourceKey, n)
+    if not self.contents then return false end
+    n = n or 1
+    if (self.contents[resourceKey] or 0) < n then return false end
+    self.contents[resourceKey] = self.contents[resourceKey] - n
+    self.amount = math.max(0, (self.amount or 0) - n)
     return true
 end
 

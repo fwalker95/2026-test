@@ -62,12 +62,14 @@ function Agent.new(x, y, role)
     self.path = nil
     self.targetNode = nil
     self.harvestTimer = 0
+    self.fetchTimer = 0
     self.worldState = {
         knowsLocation = false,
         atResource = false,
         hasResource = false,
     }
     self.resourceHeld = false
+    self.hasBiomass = false -- scientists: carrying 1 biomass for lab work
     self.crowdCooldown = 0
 
     self.idle = nil
@@ -100,6 +102,12 @@ function Agent:draw(cellSize)
         local c = roleColors[self.role] or { 0.2, 1, 0.3 }
         love.graphics.setColor(c[1], c[2], c[3])
         love.graphics.rectangle("fill", px, py, cellSize - 1, cellSize - 1)
+    end
+
+    -- small green dot when a scientist carries biomass
+    if self.hasBiomass then
+        love.graphics.setColor(0.4, 0.9, 0.3)
+        love.graphics.circle("fill", px + cellSize - 4, py + 4, 3)
     end
 
     love.graphics.setColor(1, 1, 1)
@@ -205,7 +213,7 @@ function Agent:updateIdle(dt, cols, rows, grid, allAgents)
 
     if not self.idle then
         self.idleCooldown = math.max(0, (self.idleCooldown or 0) - dt)
-        self.statusText = "Idle"
+        self.statusText = self.hasBiomass and "Holding biomass" or "Idle"
         if self.idleCooldown > 0 then return end
         self:beginIdle(AI.chooseIdle(self, allAgents), cols, rows, grid)
         if not self.idle then return end
@@ -269,6 +277,18 @@ function Agent:updateIdle(dt, cols, rows, grid, allAgents)
     end
 end
 
+function Agent:finishTask(releaseTarget)
+    local target = self.currentTask and self.currentTask.target
+    if releaseTarget and target and target.release then
+        target:release()
+    end
+    self.currentTask = nil
+    self.path = nil
+    self.harvestTimer = 0
+    self.fetchTimer = 0
+    self._reservedCell = { x = self.x, y = self.y }
+end
+
 function Agent:update(dt, cols, rows, grid, interactables, allAgents)
     dt = dt or 0.016
     self.crowdCooldown = math.max(0, self.crowdCooldown - dt)
@@ -288,30 +308,29 @@ function Agent:update(dt, cols, rows, grid, interactables, allAgents)
         return
     end
 
-    local target = self.currentTask.target
+    local task = self.currentTask
+    local ttype = task.type
+    local target = task.target
+
+    -- fetch tasks don't claim their target, so never release it
+    local owns = (ttype ~= "fetch")
+
     if not target or not target.enabled then
-        self.currentTask = nil
-        self.path = nil
-        self._reservedCell = { x = self.x, y = self.y }
+        self:finishTask(false)
         return
     end
 
     local interactionTile = getTaskTile(target, self.x, self.y)
-    self.currentTask.workTile = interactionTile
+    task.workTile = interactionTile
 
     if self.x == interactionTile.x and self.y == interactionTile.y then
-        self.statusText = self.currentTask.label
-        self.harvestTimer = self.harvestTimer + dt
-        local ttype = self.currentTask.type
+        self.statusText = task.label
 
         if ttype == "mine" then
             if target:work(self, dt) then
                 self.resourceHeld = true
                 self.statusText = "Holding resource"
-                target:release()
-                self.currentTask = nil
-                self.path = nil
-                self.harvestTimer = 0
+                self:finishTask(true)
             end
             self._reservedCell = { x = self.x, y = self.y }
             return
@@ -321,10 +340,23 @@ function Agent:update(dt, cols, rows, grid, interactables, allAgents)
             if target:work(self, dt) then
                 self.resourceHeld = false
                 self.statusText = "Delivered"
-                target:release()
-                self.currentTask = nil
-                self.path = nil
-                self.harvestTimer = 0
+                self:finishTask(true)
+            end
+            self._reservedCell = { x = self.x, y = self.y }
+            return
+        end
+
+        if ttype == "fetch" then
+            -- take 1 biomass out of the stored chest
+            self.fetchTimer = self.fetchTimer + dt
+            if self.fetchTimer >= (target.interactionTime or 1.0) then
+                if target:removeItem("biomass", 1) then
+                    self.hasBiomass = true
+                    self.statusText = "Holding biomass"
+                else
+                    self.statusText = "No biomass"
+                end
+                self:finishTask(false)
             end
             self._reservedCell = { x = self.x, y = self.y }
             return
@@ -332,25 +364,22 @@ function Agent:update(dt, cols, rows, grid, interactables, allAgents)
 
         if ttype == "research" then
             if target:work(self, dt) then
-                target:release()
-                self.currentTask = nil
-                self.path = nil
-                self.harvestTimer = 0
+                -- the biomass is consumed by the lab work
+                self.hasBiomass = false
+                target.researchCount = (target.researchCount or 0) + 1
+                self:finishTask(true)
             end
             self._reservedCell = { x = self.x, y = self.y }
             return
         end
     end
 
-    self.statusText = self.currentTask.label
+    self.statusText = task.label
     if not self.path or #self.path == 0 then
         self.path = Pathfinding.findPath(grid, cols, rows, self.x, self.y, interactionTile.x, interactionTile.y)
         if not self.path or #self.path == 0 then
             self.statusText = "Blocked"
-            self.path = nil
-            if target.release then target:release() end
-            self.currentTask = nil
-            self._reservedCell = { x = self.x, y = self.y }
+            self:finishTask(owns)
             return
         end
     end
