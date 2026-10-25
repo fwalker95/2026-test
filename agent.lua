@@ -28,21 +28,22 @@ end
 local function getTaskTile(target, fromX, fromY)
     if not target then return nil end
 
-    if target.getNearestWorkTileFrom and type(target.getNearestWorkTileFrom) == "function" then
-        local tile = target:getNearestWorkTileFrom(fromX, fromY)
-        if tile then return tile end
-    end
+    if type(target.getWorkTiles) == "function" then
+        local tiles = target:getWorkTiles()
+        local best = nil
+        local bestDist = math.huge
 
-    if target.isLegalWorkPosition and type(target.isLegalWorkPosition) == "function" then
-        local legal = nil
-        for _, tile in ipairs(target:getWorkTiles and target:getWorkTiles() or {}) do
-            if tile and tile.x and tile.y then
-                if not legal or (manhattan(fromX, fromY, tile.x, tile.y) < manhattan(fromX, fromY, legal.x, legal.y)) then
-                    legal = tile
+        for _, tile in ipairs(tiles) do
+            if tile.x and tile.y then
+                local d = manhattan(fromX, fromY, tile.x, tile.y)
+                if d < bestDist then
+                    bestDist = d
+                    best = tile
                 end
             end
         end
-        if legal then return legal end
+
+        if best then return best end
     end
 
     return { x = target.x, y = target.y }
@@ -184,17 +185,18 @@ function Agent:update(dt, cols, rows, grid, interactables, allAgents)
             self._reservedCell = { x = self.x, y = self.y }
             reservations = Pathfinding.buildReservationMap(allAgents, self)
         else
-            local goalX = target and target.x or self.x
-            local goalY = target and target.y or self.y
+            local goalX = interactionTile.x
+            local goalY = interactionTile.y
             local alternative = Pathfinding.findBestAlternativeStep(self, grid, cols, rows, goalX, goalY, reservations)
 
-            if alternative and Pathfinding.isWalkable(grid, cols, rows, alternative.x, alternative.y) and not reservations[cellKey(alternative.x, alternative.y)] and not isOccupiedByAgent(allAgents, self, alternative.x, alternative.y) then
+            if alternative and not isOccupiedByAgent(allAgents, self, alternative.x, alternative.y) then
                 self.x = alternative.x
                 self.y = alternative.y
                 self.targetRenderX = self.x - 0.5
                 self.targetRenderY = self.y - 0.5
                 self.statusText = "Making space"
                 self._reservedCell = { x = self.x, y = self.y }
+                self.path = nil
                 reservations = Pathfinding.buildReservationMap(allAgents, self)
             else
                 self.path = nil
