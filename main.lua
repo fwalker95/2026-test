@@ -1,6 +1,7 @@
 -- main.lua
 local Agent = require("agent")
 local Interactable = require("interactable")
+local Camera = require("camera")
 
 local function listAgentsMenu(agents)
     local items = {}
@@ -115,8 +116,8 @@ function AgentListMenu:new(x, y, w)
 end
 
 function love.load()
-    cols = 40
-    rows = 30
+    cols = 80
+    rows = 60
     cellSize = 20
 
     grid = {}
@@ -144,6 +145,10 @@ function love.load()
 
     agentMenu = AgentListMenu:new(190, 100, 360)
     agentMenu:refresh(agents)
+
+    local worldW = cols * cellSize
+    local worldH = rows * cellSize
+    camera = Camera.new(worldW, worldH, { speed = 700, edgeSize = 18, edgeScroll = true })
 end
 
 function love.update(dt)
@@ -151,9 +156,12 @@ function love.update(dt)
         agentMenu:refresh(agents)
     end
 
+    camera:update(dt)
+
     if love.mouse.isDown(1) then
         local mx, my = love.mouse.getPosition()
 
+        -- UI is screen space (not camera-translated)
         if agentButton:contains(mx, my) then
             return
         end
@@ -173,7 +181,7 @@ function love.update(dt)
             return
         end
 
-        local cx, cy = math.floor(mx / cellSize) + 1, math.floor(my / cellSize) + 1
+        local cx, cy = camera:screenToCell(mx, my, cellSize)
         if cx >= 1 and cx <= cols and cy >= 1 and cy <= rows then
             if selectedTool == "erase" then
                 grid[cx][cy] = 0
@@ -233,14 +241,6 @@ function love.update(dt)
         end
     end
 
-    if love.mouse.isDown(2) then
-        local mx, my = love.mouse.getPosition()
-        local cx, cy = math.floor(mx / cellSize) + 1, math.floor(my / cellSize) + 1
-        if cx >= 1 and cx <= cols and cy >= 1 and cy <= rows then
-            grid[cx][cy] = 0
-        end
-    end
-
     for _, agent in ipairs(agents) do
         agent:update(dt, cols, rows, grid, interactables, agents)
     end
@@ -249,7 +249,7 @@ end
 function love.keypressed(key)
     if key == "space" then
         local mx, my = love.mouse.getPosition()
-        local cx, cy = math.floor(mx / cellSize) + 1, math.floor(my / cellSize) + 1
+        local cx, cy = camera:screenToCell(mx, my, cellSize)
         if cx >= 1 and cx <= cols and cy >= 1 and cy <= rows then
             local occupied = false
             for _, agent in ipairs(agents) do
@@ -272,6 +272,7 @@ function love.keypressed(key)
 end
 
 function love.mousepressed(x, y, button)
+    if camera:mousepressed(x, y, button) then return end
     if button ~= 1 then return end
 
     if agentButton:contains(x, y) then
@@ -294,7 +295,7 @@ function love.mousepressed(x, y, button)
         return
     end
 
-    local cx, cy = math.floor(x / cellSize) + 1, math.floor(y / cellSize) + 1
+    local cx, cy = camera:screenToCell(x, y, cellSize)
     if cx >= 1 and cx <= cols and cy >= 1 and cy <= rows then
         if selectedTool == "erase" then
             grid[cx][cy] = 0
@@ -354,9 +355,16 @@ function love.mousepressed(x, y, button)
     end
 end
 
+function love.mousereleased(x, y, button)
+    camera:mousereleased(x, y, button)
+end
+
 function love.draw()
-    for x = 1, cols do
-        for y = 1, rows do
+    camera:attach()
+
+    local x1, y1, x2, y2 = camera:visibleCells(cellSize, cols, rows)
+    for x = x1, x2 do
+        for y = y1, y2 do
             local px, py = (x - 1) * cellSize, (y - 1) * cellSize
             local isInteractable = false
 
@@ -401,6 +409,19 @@ function love.draw()
         end
     end
 
+    love.graphics.setColor(0.2, 1, 0.3)
+    for _, agent in ipairs(agents) do
+        local px = (agent.renderX - 0.5) * cellSize
+        local py = (agent.renderY - 0.5) * cellSize
+        love.graphics.rectangle("fill", px, py, cellSize - 1, cellSize - 1)
+        love.graphics.setColor(1, 1, 1)
+        love.graphics.print(agent.statusText, px - 10, py - 18)
+        love.graphics.setColor(0.2, 1, 0.3)
+    end
+
+    camera:detach()
+
+    -- UI in screen space
     love.graphics.setColor(0.12, 0.12, 0.18, 0.9)
     love.graphics.rectangle("fill", menuRect.x, menuRect.y, menuRect.w, menuRect.h)
 
@@ -424,15 +445,6 @@ function love.draw()
         agentMenu:draw()
     end
 
-    love.graphics.setColor(0.2, 1, 0.3)
-    for _, agent in ipairs(agents) do
-        local px = (agent.renderX - 0.5) * cellSize
-        local py = (agent.renderY - 0.5) * cellSize
-        love.graphics.rectangle("fill", px, py, cellSize - 1, cellSize - 1)
-        love.graphics.setColor(1, 1, 1)
-        love.graphics.print(agent.statusText, px - 10, py - 18)
-    end
-
     love.graphics.setColor(1, 1, 1)
-    love.graphics.print("Left-click: Place/Select | Right-click: Erase Walls | SPACE: Spawn Agent | 'C': Clear Walls", 20, 10)
+    love.graphics.print("Pan: WASD/Arrows, edge scroll, or middle mouse drag | Left-click: Place/Select | SPACE: Spawn Agent | 'C': Clear Walls", 20, 10)
 end
