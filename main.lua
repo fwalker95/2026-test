@@ -198,6 +198,7 @@ local function placeAt(cx, cy, pressed)
     resources:recount(interactables)
 end
 
+-- Lab menu (full-window screen)
 local function closeLabMenu()
     labMenuOpen = false
     selectedLab = nil
@@ -206,6 +207,11 @@ end
 local function openLabMenu(lab)
     selectedLab = lab
     labMenuOpen = true
+end
+
+local function labCloseButtonRect()
+    local w = love.graphics.getWidth()
+    return { x = w - 56, y = 16, w = 40, h = 40 }
 end
 
 local function hitLabAtCell(cx, cy)
@@ -218,18 +224,6 @@ local function hitLabAtCell(cx, cy)
 end
 
 local function handleUI(x, y, onPress)
-    if labMenuOpen then
-        local insideLabPanel = (x >= labPanel.x and x <= labPanel.x + labPanel.w and y >= labPanel.y and y <= labPanel.y + labPanel.h)
-        if insideLabPanel then
-            return true
-        end
-
-        if onPress then
-            closeLabMenu()
-        end
-        return true
-    end
-
     if agentButton:contains(x, y) then
         if onPress then agentButton.onClick() end
         return true
@@ -308,7 +302,6 @@ function love.load()
     labSphere = LabSphere.new({ baseColor = { 0.35, 0.75, 1.0 }, spinSpeed = 1.2, tilt = 0.4 })
     labMenuOpen = false
     selectedLab = nil
-    labPanel = { x = 780, y = 120, w = 360, h = 420 }
 
     local worldW = cols * cellSize
     local worldH = rows * cellSize
@@ -316,14 +309,16 @@ function love.load()
 end
 
 function love.update(dt)
-    agentMenu:refresh(agents)
-    camera:update(dt)
-
+    -- Lab screen takes over: only the sphere animates, the world is paused for input
     if labMenuOpen then
         labSphere:update(dt)
+    else
+        camera:update(dt)
     end
 
-    if love.mouse.isDown(1) and not labMenuOpen then
+    agentMenu:refresh(agents)
+
+    if not labMenuOpen and love.mouse.isDown(1) then
         local mx, my = love.mouse.getPosition()
         if not handleUI(mx, my, false) and not isAgentTool(selectedTool) then
             local cx, cy = camera:screenToCell(mx, my, cellSize)
@@ -331,6 +326,7 @@ function love.update(dt)
         end
     end
 
+    -- simulation keeps running in the background
     for _, agent in ipairs(agents) do
         agent:update(dt, cols, rows, grid, interactables, agents)
     end
@@ -339,20 +335,18 @@ function love.update(dt)
 end
 
 function love.keypressed(key)
+    if labMenuOpen then
+        if key == "escape" then closeLabMenu() end
+        if key == "n" then labSphere.showNormals = not labSphere.showNormals end
+        return
+    end
+
     if key == "space" then
         local mx, my = love.mouse.getPosition()
         local cx, cy = camera:screenToCell(mx, my, cellSize)
         if cx >= 1 and cx <= cols and cy >= 1 and cy <= rows and not isCellOccupied(cx, cy) then
             spawnAgent(cx, cy, "miner")
         end
-    end
-
-    if key == "n" and labMenuOpen then
-        labSphere.showNormals = not labSphere.showNormals
-    end
-
-    if key == "escape" and labMenuOpen then
-        closeLabMenu()
     end
 
     if key == "c" then
@@ -363,6 +357,16 @@ function love.keypressed(key)
 end
 
 function love.mousepressed(x, y, button)
+    if labMenuOpen then
+        if button == 1 then
+            local r = labCloseButtonRect()
+            if x >= r.x and x <= r.x + r.w and y >= r.y and y <= r.y + r.h then
+                closeLabMenu()
+            end
+        end
+        return
+    end
+
     if camera:mousepressed(x, y, button) then return end
     if button ~= 1 then return end
 
@@ -379,10 +383,52 @@ function love.mousepressed(x, y, button)
 end
 
 function love.mousereleased(x, y, button)
+    if labMenuOpen then return end
     camera:mousereleased(x, y, button)
 end
 
+local function drawLabScreen()
+    local W, H = love.graphics.getWidth(), love.graphics.getHeight()
+
+    -- full-window background
+    love.graphics.setColor(0.03, 0.05, 0.09, 1)
+    love.graphics.rectangle("fill", 0, 0, W, H)
+
+    -- title
+    love.graphics.setColor(1, 1, 1)
+    love.graphics.print("LAB", 24, 24, 0, 2, 2)
+    if selectedLab then
+        love.graphics.setColor(0.7, 0.85, 1.0)
+        love.graphics.print(string.format("Lab @ (%d,%d)", selectedLab.x, selectedLab.y), 24, 58)
+    end
+
+    -- sphere centered in the window
+    local radius = math.floor(math.min(W, H) * 0.3)
+    labSphere:draw(W * 0.5, H * 0.5, radius)
+
+    -- X close button (top-right)
+    local r = labCloseButtonRect()
+    local mx, my = love.mouse.getPosition()
+    local hover = mx >= r.x and mx <= r.x + r.w and my >= r.y and my <= r.y + r.h
+    love.graphics.setColor(hover and 0.9 or 0.65, hover and 0.2 or 0.15, hover and 0.2 or 0.15)
+    love.graphics.rectangle("fill", r.x, r.y, r.w, r.h, 6, 6)
+    love.graphics.setColor(1, 1, 1)
+    love.graphics.setLineWidth(3)
+    love.graphics.line(r.x + 11, r.y + 11, r.x + r.w - 11, r.y + r.h - 11)
+    love.graphics.line(r.x + r.w - 11, r.y + 11, r.x + 11, r.y + r.h - 11)
+    love.graphics.setLineWidth(1)
+
+    -- hints
+    love.graphics.setColor(0.7, 0.8, 0.9)
+    love.graphics.print("N: toggle normal view    ESC or X: close", 24, H - 30)
+end
+
 function love.draw()
+    if labMenuOpen then
+        drawLabScreen()
+        return
+    end
+
     camera:attach()
 
     local x1, y1, x2, y2 = camera:visibleCells(cellSize, cols, rows)
@@ -466,27 +512,6 @@ function love.draw()
     placeMenu:draw()
 
     resources:draw(10, 215)
-
-    if labMenuOpen then
-        love.graphics.setColor(0.05, 0.08, 0.12, 0.93)
-        love.graphics.rectangle("fill", labPanel.x, labPanel.y, labPanel.w, labPanel.h, 8, 8)
-        love.graphics.setColor(0.2, 0.7, 1.0)
-        love.graphics.rectangle("line", labPanel.x, labPanel.y, labPanel.w, labPanel.h, 8, 8)
-
-        love.graphics.setColor(1, 1, 1)
-        love.graphics.print("Lab Control", labPanel.x + 14, labPanel.y + 14)
-        if selectedLab then
-            love.graphics.print(string.format("Lab @ (%d,%d)", selectedLab.x, selectedLab.y), labPanel.x + 14, labPanel.y + 36)
-        end
-
-        local cx = labPanel.x + math.floor(labPanel.w * 0.5)
-        local cy = labPanel.y + 215
-        labSphere:draw(cx, cy, 110)
-
-        love.graphics.setColor(0.8, 0.9, 1.0)
-        love.graphics.print("N: toggle normal view", labPanel.x + 14, labPanel.y + labPanel.h - 46)
-        love.graphics.print("ESC/click outside: close", labPanel.x + 14, labPanel.y + labPanel.h - 26)
-    end
 
     love.graphics.setColor(1, 1, 1)
     love.graphics.print("Pan: WASD/Arrows, edge scroll, or middle mouse drag | Left-click: Place / open Lab menu", 180, 10)
