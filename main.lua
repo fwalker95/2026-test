@@ -5,15 +5,11 @@ local Camera = require("camera")
 local Resources = require("resources")
 local AssetManager = require("asset_manager")
 
-local function listAgentsMenu(agents)
-    local items = {}
-    for i, agent in ipairs(agents) do
-        local status = agent.statusText or "Idle"
-        local holding = agent.resourceHeld and "yes" or "no"
-        local carried = agent.carriedType or "none"
-        table.insert(items, string.format("Agent %d: (%d,%d) %s hold=%s carry=%s", i, agent.x, agent.y, status, holding, carried))
-    end
-    return items
+local kindImageKeys = { mine = "resource", box = "box", lab = "lab" }
+
+local function drawImageInCell(image, px, py, size)
+    love.graphics.setColor(1, 1, 1)
+    love.graphics.draw(image, px, py, 0, size / image:getWidth(), size / image:getHeight())
 end
 
 UIButton = {}
@@ -60,8 +56,12 @@ function Menu:new(x, y, w, h)
     return m
 end
 
-function Menu:addItem(label, callback)
-    table.insert(self.items, { label = label, callback = callback })
+function Menu:addItem(label, callback, isSelected)
+    table.insert(self.items, { label = label, callback = callback, isSelected = isSelected })
+end
+
+function Menu:contains(px, py)
+    return px >= self.x and px <= self.x + self.w and py >= self.y and py <= self.y + self.h
 end
 
 function Menu:draw()
@@ -72,7 +72,11 @@ function Menu:draw()
 
     for i, item in ipairs(self.items) do
         local iy = self.y + 10 + (i - 1) * 22
-        love.graphics.setColor(0.22, 0.22, 0.28)
+        if item.isSelected and item.isSelected() then
+            love.graphics.setColor(0.35, 0.9, 0.35)
+        else
+            love.graphics.setColor(0.22, 0.22, 0.28)
+        end
         love.graphics.rectangle("fill", self.x + 6, iy, self.w - 12, 18)
         love.graphics.setColor(1, 1, 1)
         love.graphics.print(item.label, self.x + 12, iy + 4)
@@ -98,6 +102,9 @@ AgentListMenu = setmetatable({}, { __index = Menu })
 function AgentListMenu:new(x, y, w)
     local m = Menu.new(self, x, y, w, 220)
     m.visible = false
+    m.contains = Menu.contains
+    m.draw = Menu.draw
+    m.click = Menu.click
     m.refresh = function(self, agents)
         self.items = {}
         if #agents == 0 then
@@ -109,14 +116,118 @@ function AgentListMenu:new(x, y, w)
             local status = agent.statusText or "Idle"
             local holding = agent.resourceHeld and "yes" or "no"
             local carried = agent.carriedType or "none"
-            local label = string.format("Agent %d: (%d,%d) %s hold=%s carry=%s", i, agent.x, agent.y, status, holding, carried)
-            table.insert(self.items, {
-                label = label,
-                callback = function() end
-            })
+            local label = string.format("%d [%s]: (%d,%d) %s hold=%s carry=%s", i, agent.role, agent.x, agent.y, status, holding, carried)
+            table.insert(self.items, { label = label, callback = function() end })
         end
     end
     return m
+end
+
+-- Left tool panel: placeable things
+local toolItems = {
+    { name = "resource", label = "Resource" },
+    { name = "box", label = "Box" },
+    { name = "lab", label = "Lab" },
+    { name = "erase", label = "Erase" },
+}
+
+local function isAgentTool(tool)
+    return tool == "agent_miner" or tool == "agent_scientist"
+end
+
+local function isCellOccupied(cx, cy)
+    for _, item in ipairs(interactables) do
+        if item.x == cx and item.y == cy then return true end
+    end
+    for _, agent in ipairs(agents) do
+        if agent.x == cx and agent.y == cy then return true end
+    end
+    return false
+end
+
+local function spawnAgent(cx, cy, role)
+    local a = Agent.new(cx, cy, role)
+    assets:assignAgent(a)
+    table.insert(agents, a)
+    return a
+end
+
+-- pressed = true only on the initial click (agents shouldn't spawn while dragging)
+local function placeAt(cx, cy, pressed)
+    if cx < 1 or cx > cols or cy < 1 or cy > rows then return end
+
+    if selectedTool == "erase" then
+        grid[cx][cy] = 0
+        for i = #interactables, 1, -1 do
+            local item = interactables[i]
+            if item.x == cx and item.y == cy then
+                table.remove(interactables, i)
+            end
+        end
+        resources:recount(interactables)
+        return
+    end
+
+    if isAgentTool(selectedTool) then
+        if pressed and not isCellOccupied(cx, cy) then
+            spawnAgent(cx, cy, selectedTool == "agent_scientist" and "scientist" or "miner")
+        end
+        return
+    end
+
+    if isCellOccupied(cx, cy) then return end
+
+    if selectedTool == "resource" then
+        table.insert(interactables, Interactable.new("mine", cx, cy, {
+            allowedRoles = { "miner" },
+            resourceLeft = 5,
+            interactionTime = 1.5,
+        }))
+    elseif selectedTool == "box" then
+        table.insert(interactables, Interactable.new("box", cx, cy, {
+            allowedRoles = { "miner" },
+            capacity = 10,
+            amount = 0,
+            interactionTime = 1.0,
+        }))
+    elseif selectedTool == "lab" then
+        table.insert(interactables, Interactable.new("lab", cx, cy, {
+            allowedRoles = { "scientist" },
+            interactionTime = 3.0,
+        }))
+    end
+    resources:recount(interactables)
+end
+
+-- Returns true if the click was on UI. onPress = true on mousepressed.
+local function handleUI(x, y, onPress)
+    if agentButton:contains(x, y) then
+        if onPress then agentButton.onClick() end
+        return true
+    end
+
+    if placeButton:contains(x, y) then
+        if onPress then placeButton.onClick() end
+        return true
+    end
+
+    if agentMenu.visible and agentMenu:contains(x, y) then
+        if onPress then agentMenu:click(x, y) end
+        return true
+    end
+
+    if placeMenu.visible and placeMenu:contains(x, y) then
+        if onPress then placeMenu:click(x, y) end
+        return true
+    end
+
+    if x >= menuRect.x and x <= menuRect.x + menuRect.w and y >= menuRect.y and y <= menuRect.y + menuRect.h then
+        local idx = math.floor((y - menuRect.y) / 30) + 1
+        if toolItems[idx] then selectedTool = toolItems[idx].name end
+        return true
+    end
+
+    return false
 end
 
 function love.load()
@@ -134,29 +245,36 @@ function love.load()
         Interactable.new("mine", 30, 15, { allowedRoles = { "miner" }, resourceLeft = 5, interactionTime = 1.5, resourceType = "biomass" }),
         Interactable.new("mine", 27, 20, { allowedRoles = { "miner" }, resourceLeft = 5, interactionTime = 1.5, resourceType = "dna" }),
         Interactable.new("box", 20, 15, { allowedRoles = { "miner" }, capacity = 10, amount = 0, interactionTime = 1.0 }),
+        Interactable.new("lab", 20, 22, { allowedRoles = { "scientist" }, interactionTime = 3.0 }),
     }
 
     resources = Resources.new()
     resources:recount(interactables)
 
-    agents = {}
-    table.insert(agents, Agent.new(10, 15, "miner"))
-    table.insert(agents, Agent.new(12, 17, "miner"))
-
     assets = AssetManager.new()
-    for _, a in ipairs(agents) do
-        assets:assignImage(a, "agent")
-    end
+
+    agents = {}
+    spawnAgent(10, 15, "miner")
+    spawnAgent(12, 17, "miner")
+    spawnAgent(14, 19, "scientist")
 
     selectedTool = "resource"
-    menuRect = { x = 10, y = 10, w = 150, h = 80 }
+    menuRect = { x = 10, y = 10, w = 150, h = #toolItems * 30 }
 
-    agentButton = UIButton:new(10, 100, 160, 28, "Agents", function()
+    agentButton = UIButton:new(10, 140, 160, 28, "Agents", function()
         agentMenu.visible = not agentMenu.visible
     end)
 
-    agentMenu = AgentListMenu:new(190, 100, 420)
+    placeButton = UIButton:new(10, 175, 160, 28, "Place Agent", function()
+        placeMenu.visible = not placeMenu.visible
+    end)
+
+    agentMenu = AgentListMenu:new(190, 140, 460)
     agentMenu:refresh(agents)
+
+    placeMenu = Menu:new(190, 175, 200, 70)
+    placeMenu:addItem("Miner", function() selectedTool = "agent_miner" end, function() return selectedTool == "agent_miner" end)
+    placeMenu:addItem("Scientist", function() selectedTool = "agent_scientist" end, function() return selectedTool == "agent_scientist" end)
 
     local worldW = cols * cellSize
     local worldH = rows * cellSize
@@ -164,94 +282,15 @@ function love.load()
 end
 
 function love.update(dt)
-    if agentMenu then
-        agentMenu:refresh(agents)
-    end
-
+    agentMenu:refresh(agents)
     camera:update(dt)
 
+    -- hold-to-drag placement for non-agent tools
     if love.mouse.isDown(1) then
         local mx, my = love.mouse.getPosition()
-
-        if agentButton:contains(mx, my) then
-            return
-        end
-
-        if agentMenu.visible and agentMenu:click(mx, my) then
-            return
-        end
-
-        if mx >= menuRect.x and mx <= menuRect.x + menuRect.w and my >= menuRect.y and my <= menuRect.y + menuRect.h then
-            if my <= menuRect.y + 30 then
-                selectedTool = "resource"
-            elseif my <= menuRect.y + 60 then
-                selectedTool = "box"
-            else
-                selectedTool = "erase"
-            end
-            return
-        end
-
-        local cx, cy = camera:screenToCell(mx, my, cellSize)
-        if cx >= 1 and cx <= cols and cy >= 1 and cy <= rows then
-            if selectedTool == "erase" then
-                grid[cx][cy] = 0
-                for i = #interactables, 1, -1 do
-                    local item = interactables[i]
-                    if item.x == cx and item.y == cy then
-                        table.remove(interactables, i)
-                    end
-                end
-                resources:recount(interactables)
-                return
-            end
-
-            if selectedTool == "resource" then
-                local occupied = false
-                for _, item in ipairs(interactables) do
-                    if item.x == cx and item.y == cy then
-                        occupied = true
-                        break
-                    end
-                end
-                for _, agent in ipairs(agents) do
-                    if agent.x == cx and agent.y == cy then
-                        occupied = true
-                        break
-                    end
-                end
-                if not occupied then
-                    table.insert(interactables, Interactable.new("mine", cx, cy, {
-                        allowedRoles = { "miner" },
-                        resourceLeft = 5,
-                        interactionTime = 1.5,
-                    }))
-                    resources:recount(interactables)
-                end
-            elseif selectedTool == "box" then
-                local occupied = false
-                for _, item in ipairs(interactables) do
-                    if item.x == cx and item.y == cy then
-                        occupied = true
-                        break
-                    end
-                end
-                for _, agent in ipairs(agents) do
-                    if agent.x == cx and agent.y == cy then
-                        occupied = true
-                        break
-                    end
-                end
-                if not occupied then
-                    table.insert(interactables, Interactable.new("box", cx, cy, {
-                        allowedRoles = { "miner" },
-                        capacity = 10,
-                        amount = 0,
-                        interactionTime = 1.0,
-                    }))
-                    resources:recount(interactables)
-                end
-            end
+        if not handleUI(mx, my, false) and not isAgentTool(selectedTool) then
+            local cx, cy = camera:screenToCell(mx, my, cellSize)
+            placeAt(cx, cy, false)
         end
     end
 
@@ -266,19 +305,8 @@ function love.keypressed(key)
     if key == "space" then
         local mx, my = love.mouse.getPosition()
         local cx, cy = camera:screenToCell(mx, my, cellSize)
-        if cx >= 1 and cx <= cols and cy >= 1 and cy <= rows then
-            local occupied = false
-            for _, agent in ipairs(agents) do
-                if agent.x == cx and agent.y == cy then
-                    occupied = true
-                    break
-                end
-            end
-            if not occupied then
-                local newAgent = Agent.new(cx, cy, "miner")
-                assets:assignImage(newAgent, "agent")
-                table.insert(agents, newAgent)
-            end
+        if cx >= 1 and cx <= cols and cy >= 1 and cy <= rows and not isCellOccupied(cx, cy) then
+            spawnAgent(cx, cy, "miner")
         end
     end
 
@@ -293,87 +321,10 @@ function love.mousepressed(x, y, button)
     if camera:mousepressed(x, y, button) then return end
     if button ~= 1 then return end
 
-    if agentButton:contains(x, y) then
-        agentButton.onClick()
-        return
-    end
-
-    if agentMenu.visible and agentMenu:click(x, y) then
-        return
-    end
-
-    if x >= menuRect.x and x <= menuRect.x + menuRect.w and y >= menuRect.y and y <= menuRect.y + menuRect.h then
-        if y <= menuRect.y + 30 then
-            selectedTool = "resource"
-        elseif y <= menuRect.y + 60 then
-            selectedTool = "box"
-        else
-            selectedTool = "erase"
-        end
-        return
-    end
+    if handleUI(x, y, true) then return end
 
     local cx, cy = camera:screenToCell(x, y, cellSize)
-    if cx >= 1 and cx <= cols and cy >= 1 and cy <= rows then
-        if selectedTool == "erase" then
-            grid[cx][cy] = 0
-            for i = #interactables, 1, -1 do
-                local item = interactables[i]
-                if item.x == cx and item.y == cy then
-                    table.remove(interactables, i)
-                end
-            end
-            resources:recount(interactables)
-            return
-        end
-
-        if selectedTool == "resource" then
-            local occupied = false
-            for _, item in ipairs(interactables) do
-                if item.x == cx and item.y == cy then
-                    occupied = true
-                    break
-                end
-            end
-            for _, agent in ipairs(agents) do
-                if agent.x == cx and agent.y == cy then
-                    occupied = true
-                    break
-                end
-            end
-            if not occupied then
-                table.insert(interactables, Interactable.new("mine", cx, cy, {
-                    allowedRoles = { "miner" },
-                    resourceLeft = 5,
-                    interactionTime = 1.5,
-                }))
-                resources:recount(interactables)
-            end
-        elseif selectedTool == "box" then
-            local occupied = false
-            for _, item in ipairs(interactables) do
-                if item.x == cx and item.y == cy then
-                    occupied = true
-                    break
-                end
-            end
-            for _, agent in ipairs(agents) do
-                if agent.x == cx and agent.y == cy then
-                    occupied = true
-                    break
-                end
-            end
-            if not occupied then
-                table.insert(interactables, Interactable.new("box", cx, cy, {
-                    allowedRoles = { "miner" },
-                    capacity = 10,
-                    amount = 0,
-                    interactionTime = 1.0,
-                }))
-                resources:recount(interactables)
-            end
-        end
-    end
+    placeAt(cx, cy, true)
 end
 
 function love.mousereleased(x, y, button)
@@ -396,19 +347,30 @@ function love.draw()
                 end
             end
 
-            if isInteractable then
-                love.graphics.setColor(0.25, 0.25, 0.25)
-            elseif grid[x][y] == 1 then
-                love.graphics.setColor(0.3, 0.3, 0.3)
+            local tileImage = assets:get(grid[x][y] == 1 and "wall" or "ground")
+            if tileImage and not isInteractable then
+                drawImageInCell(tileImage, px, py, cellSize)
             else
-                love.graphics.setColor(0.12, 0.12, 0.12)
+                if isInteractable then
+                    love.graphics.setColor(0.25, 0.25, 0.25)
+                elseif grid[x][y] == 1 then
+                    love.graphics.setColor(0.3, 0.3, 0.3)
+                else
+                    love.graphics.setColor(0.12, 0.12, 0.12)
+                end
+                love.graphics.rectangle("fill", px, py, cellSize - 1, cellSize - 1)
             end
-
-            love.graphics.rectangle("fill", px, py, cellSize - 1, cellSize - 1)
         end
     end
 
     for _, item in ipairs(interactables) do
+        if not item.image and kindImageKeys[item.kind] then
+            assets:assignImage(item, kindImageKeys[item.kind])
+        end
+        if item.image then
+            drawImageInCell(item.image, (item.x - 1) * cellSize, (item.y - 1) * cellSize, cellSize)
+        end
+
         local px = (item.x - 1) * cellSize + 2
         local py = (item.y - 1) * cellSize - 14
         love.graphics.setColor(1, 1, 1)
@@ -416,16 +378,13 @@ function love.draw()
         if item.kind == "mine" then
             local percent = 0
             if item.resourceLeft and item.resourceLeft > 0 then
-                local total = 5
-                percent = math.floor((item.resourceLeft / total) * 100)
+                percent = math.floor((item.resourceLeft / 5) * 100)
             end
-            local typeLabel = item.resourceType or "unknown"
-            love.graphics.print(string.format("Mine:%d%% (%s)", percent, typeLabel), px, py)
+            love.graphics.print(string.format("Mine:%d%% (%s)", percent, item.resourceType or "?"), px, py)
         elseif item.kind == "box" then
             local total = item.capacity or 1
             local used = item.amount or 0
-            local percent = math.floor((used / total) * 100)
-            love.graphics.print(string.format("Box:%d%%", percent), px, py)
+            love.graphics.print(string.format("Box:%d%%", math.floor((used / total) * 100)), px, py)
         else
             love.graphics.print(item.kind, px, py)
         end
@@ -437,16 +396,11 @@ function love.draw()
 
     camera:detach()
 
+    -- UI in screen space
     love.graphics.setColor(0.12, 0.12, 0.18, 0.9)
     love.graphics.rectangle("fill", menuRect.x, menuRect.y, menuRect.w, menuRect.h)
 
-    local items = {
-        { name = "resource", label = "Resource" },
-        { name = "box", label = "Box" },
-        { name = "erase", label = "Erase" }
-    }
-
-    for i, item in ipairs(items) do
+    for i, item in ipairs(toolItems) do
         local y = menuRect.y + (i - 1) * 30
         local selected = selectedTool == item.name
         love.graphics.setColor(selected and 0.35 or 0.2, selected and 0.9 or 0.5, selected and 0.35 or 0.6)
@@ -456,14 +410,13 @@ function love.draw()
     end
 
     agentButton:draw()
-    if agentMenu then
-        agentMenu:draw()
-    end
+    placeButton.selected = isAgentTool(selectedTool)
+    placeButton:draw()
+    agentMenu:draw()
+    placeMenu:draw()
 
-    if resources then
-        resources:draw(10, 150)
-    end
+    resources:draw(10, 215)
 
     love.graphics.setColor(1, 1, 1)
-    love.graphics.print("Pan: WASD/Arrows, edge scroll, or middle mouse drag | Left-click: Place/Select | SPACE: Spawn Agent | 'C': Clear Walls", 20, 10)
+    love.graphics.print("Pan: WASD/Arrows, edge scroll, or middle mouse drag | Left-click: Place | SPACE: Spawn Miner | 'C': Clear Walls", 180, 10)
 end

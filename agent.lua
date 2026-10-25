@@ -6,6 +6,12 @@ Agent.__index = Agent
 
 local R = (love and love.math) or math
 
+-- Fallback colors when no PNG exists for the role
+local roleColors = {
+    miner = { 0.2, 1.0, 0.3 },
+    scientist = { 0.3, 0.6, 1.0 },
+}
+
 local function manhattan(x1, y1, x2, y2)
     return math.abs(x1 - x2) + math.abs(y1 - y2)
 end
@@ -33,22 +39,6 @@ local function getTaskTile(target, fromX, fromY)
     if target.getNearestWorkTileFrom and type(target.getNearestWorkTileFrom) == "function" then
         local tile = target:getNearestWorkTileFrom(fromX, fromY)
         if tile then return tile end
-    end
-
-    if target.isLegalWorkPosition and type(target.isLegalWorkPosition) == "function" then
-        local legal = nil
-        local workTiles = {}
-        if target.getWorkTiles and type(target.getWorkTiles) == "function" then
-            workTiles = target:getWorkTiles() or {}
-        end
-        for _, tile in ipairs(workTiles) do
-            if tile and tile.x and tile.y then
-                if not legal or (manhattan(fromX, fromY, tile.x, tile.y) < manhattan(fromX, fromY, legal.x, legal.y)) then
-                    legal = tile
-                end
-            end
-        end
-        if legal then return legal end
     end
 
     return { x = target.x, y = target.y }
@@ -107,7 +97,8 @@ function Agent:draw(cellSize)
         local sy = cellSize / self.image:getHeight()
         love.graphics.draw(self.image, px, py, 0, sx, sy)
     else
-        love.graphics.setColor(0.2, 1, 0.3)
+        local c = roleColors[self.role] or { 0.2, 1, 0.3 }
+        love.graphics.setColor(c[1], c[2], c[3])
         love.graphics.rectangle("fill", px, py, cellSize - 1, cellSize - 1)
     end
 
@@ -311,8 +302,9 @@ function Agent:update(dt, cols, rows, grid, interactables, allAgents)
     if self.x == interactionTile.x and self.y == interactionTile.y then
         self.statusText = self.currentTask.label
         self.harvestTimer = self.harvestTimer + dt
+        local ttype = self.currentTask.type
 
-        if self.currentTask.type == "mine" then
+        if ttype == "mine" then
             if target:work(self, dt) then
                 self.resourceHeld = true
                 self.statusText = "Holding resource"
@@ -320,14 +312,12 @@ function Agent:update(dt, cols, rows, grid, interactables, allAgents)
                 self.currentTask = nil
                 self.path = nil
                 self.harvestTimer = 0
-                self._reservedCell = { x = self.x, y = self.y }
-                return
             end
             self._reservedCell = { x = self.x, y = self.y }
             return
         end
 
-        if self.currentTask.type == "deliver" then
+        if ttype == "deliver" then
             if target:work(self, dt) then
                 self.resourceHeld = false
                 self.statusText = "Delivered"
@@ -335,8 +325,17 @@ function Agent:update(dt, cols, rows, grid, interactables, allAgents)
                 self.currentTask = nil
                 self.path = nil
                 self.harvestTimer = 0
-                self._reservedCell = { x = self.x, y = self.y }
-                return
+            end
+            self._reservedCell = { x = self.x, y = self.y }
+            return
+        end
+
+        if ttype == "research" then
+            if target:work(self, dt) then
+                target:release()
+                self.currentTask = nil
+                self.path = nil
+                self.harvestTimer = 0
             end
             self._reservedCell = { x = self.x, y = self.y }
             return
@@ -349,6 +348,7 @@ function Agent:update(dt, cols, rows, grid, interactables, allAgents)
         if not self.path or #self.path == 0 then
             self.statusText = "Blocked"
             self.path = nil
+            if target.release then target:release() end
             self.currentTask = nil
             self._reservedCell = { x = self.x, y = self.y }
             return

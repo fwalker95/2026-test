@@ -7,9 +7,12 @@ function AssetManager.new()
     self.images = {}
 
     -- Centralized image path registry
-    self:loadImage("agent", "assets/agent.png")
+    self:loadImage("agent", "assets/agent.png")          -- generic fallback
+    self:loadImage("miner", "assets/miner.png")
+    self:loadImage("scientist", "assets/scientist.png")
     self:loadImage("resource", "assets/resource.png")
     self:loadImage("box", "assets/box.png")
+    self:loadImage("lab", "assets/lab.png")
     self:loadImage("wall", "assets/wall.png")
     self:loadImage("ground", "assets/ground.png")
 
@@ -41,11 +44,19 @@ function AssetManager:assignImage(object, key)
     return object
 end
 
+-- Uses assets/<role>.png, falls back to assets/agent.png
+function AssetManager:assignAgent(agent)
+    if not agent then return nil end
+    local key = agent.role
+    if not self.images[key] then key = "agent" end
+    return self:assignImage(agent, key)
+end
+
 function AssetManager:assignAll(world)
     if not world then return end
 
     for _, agent in ipairs(world.agents or {}) do
-        self:assignImage(agent, "agent")
+        self:assignAgent(agent)
     end
 
     for _, node in ipairs(world.resourceNodes or {}) do

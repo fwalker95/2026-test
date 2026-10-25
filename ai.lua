@@ -25,7 +25,7 @@ local function nearestInteractable(agent, interactables, predicate)
     return best
 end
 
--- Work goals (mine / deliver). Returns nil when there is nothing to do.
+-- Work goals per role. Returns nil when there is nothing to do.
 function AI.chooseTask(agent, interactables)
     if not interactables then return nil end
 
@@ -43,31 +43,29 @@ function AI.chooseTask(agent, interactables)
         return (node.amount or 0) < node.capacity
     end
 
+    local function labReady(node)
+        if not node or node.kind ~= "lab" then return false end
+        if not node:canInteract(agent) then return false end
+        return not node.claimedBy
+    end
+
     if agent.role == "miner" then
         if agent.resourceHeld then
             local storage = nearestInteractable(agent, interactables, storageReady)
-            if storage then
-                if storage:claim(agent) then
-                    return {
-                        type = "deliver",
-                        label = "Delivering",
-                        target = storage,
-                        kind = storage.kind,
-                    }
-                end
+            if storage and storage:claim(agent) then
+                return { type = "deliver", label = "Delivering", target = storage, kind = storage.kind }
             end
         else
             local mine = nearestInteractable(agent, interactables, mineReady)
-            if mine then
-                if mine:claim(agent) then
-                    return {
-                        type = "mine",
-                        label = "Mining",
-                        target = mine,
-                        kind = "mine",
-                    }
-                end
+            if mine and mine:claim(agent) then
+                return { type = "mine", label = "Mining", target = mine, kind = "mine" }
             end
+        end
+
+    elseif agent.role == "scientist" then
+        local lab = nearestInteractable(agent, interactables, labReady)
+        if lab and lab:claim(agent) then
+            return { type = "research", label = "Researching", target = lab, kind = "lab" }
         end
     end
 
@@ -94,7 +92,6 @@ function AI.findChatPartner(agent, allAgents, maxDist)
 end
 
 -- Idle goal: used only when there is no work. Weighted random pick.
--- Returns { type = "wander" | "chat" | "smoke", partner = agent? }
 function AI.chooseIdle(agent, allAgents)
     local partner = AI.findChatPartner(agent, allAgents)
 
