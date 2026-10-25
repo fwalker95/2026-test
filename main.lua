@@ -216,18 +216,13 @@ end
 local function openLabMenu(lab)
     selectedLab = lab
     labMenuOpen = true
-    labTab = "overview"
+    labTab = "sequencer"
     labSampleIndex = math.max(1, #lab.samples)
 end
 
 local function stepSample(delta)
     if not selectedLab or #selectedLab.samples == 0 then return end
     labSampleIndex = ((labSampleIndex - 1 + delta) % #selectedLab.samples) + 1
-end
-
-local function scanCurrentSample()
-    local s = currentSample()
-    if s then s:scan() end
 end
 
 local function labCloseButtonRect()
@@ -237,18 +232,14 @@ end
 
 local function labTabRects()
     return {
-        overview = { x = 24, y = 90, w = 130, h = 32, label = "Overview" },
-        sequencer = { x = 164, y = 90, w = 150, h = 32, label = "Sequencer" },
+        sequencer = { x = 24, y = 90, w = 160, h = 32, label = "Sequencer" },
+        useful = { x = 194, y = 90, w = 180, h = 32, label = "Useful Samples" },
+        waste = { x = 384, y = 90, w = 170, h = 32, label = "Genetic Waste" },
     }
 end
 
-local function labScanRect()
-    local w = love.graphics.getWidth()
-    return { x = w - 230, y = 90, w = 206, h = 32 }
-end
-
-local function labPrevRect() return { x = 340, y = 90, w = 36, h = 32 } end
-local function labNextRect() return { x = 500, y = 90, w = 36, h = 32 } end
+local function labPrevRect() return { x = 580, y = 90, w = 36, h = 32 } end
+local function labNextRect() return { x = 740, y = 90, w = 36, h = 32 } end
 
 local function inRect(r, x, y)
     return x >= r.x and x <= r.x + r.w and y >= r.y and y <= r.y + r.h
@@ -341,7 +332,7 @@ function love.load()
 
     labSphere = LabSphere.new({ baseColor = { 0.35, 0.75, 1.0 }, spinSpeed = 1.2, tilt = 0.4 })
     labMenuOpen = false
-    labTab = "overview"
+    labTab = "sequencer"
     labSampleIndex = 1
     selectedLab = nil
 
@@ -378,11 +369,10 @@ end
 function love.keypressed(key)
     if labMenuOpen then
         if key == "escape" then closeLabMenu() end
-        if key == "1" then labTab = "overview" end
-        if key == "2" then labTab = "sequencer" end
-        if key == "n" and labTab == "overview" then labSphere.showNormals = not labSphere.showNormals end
+        if key == "1" then labTab = "sequencer" end
+        if key == "2" then labTab = "useful" end
+        if key == "3" then labTab = "waste" end
         if labTab == "sequencer" then
-            if key == "r" or key == "space" then scanCurrentSample() end
             if key == "left" then stepSample(-1) end
             if key == "right" then stepSample(1) end
         end
@@ -415,7 +405,6 @@ function love.mousepressed(x, y, button)
                 if inRect(r, x, y) then labTab = name return end
             end
             if labTab == "sequencer" then
-                if inRect(labScanRect(), x, y) then scanCurrentSample() end
                 if inRect(labPrevRect(), x, y) then stepSample(-1) end
                 if inRect(labNextRect(), x, y) then stepSample(1) end
             end
@@ -469,7 +458,7 @@ local function drawLabScreen()
     love.graphics.print("LAB", 24, 24, 0, 2, 2)
     if selectedLab then
         love.graphics.setColor(0.7, 0.85, 1.0)
-        love.graphics.print(string.format("Lab @ (%d,%d)   Research completed: %d   Samples: %d", selectedLab.x, selectedLab.y, selectedLab.researchCount or 0, #selectedLab.samples), 24, 58)
+        love.graphics.print(string.format("Lab @ (%d,%d)   Research completed: %d   Active samples: %d", selectedLab.x, selectedLab.y, selectedLab.researchCount or 0, #selectedLab.samples), 24, 58)
     end
 
     -- tabs
@@ -481,42 +470,66 @@ local function drawLabScreen()
     local contentY = 140
     local contentH = H - contentY - 60
 
-    if labTab == "overview" then
-        local radius = math.floor(math.min(W, contentH) * 0.3)
-        labSphere:draw(W * 0.5, contentY + contentH * 0.5, radius)
-
-        love.graphics.setColor(0.7, 0.8, 0.9)
-        love.graphics.print("Scientists need 1 biomass from a stored chest to work this lab.", 24, contentY)
-        love.graphics.print("Each biomass used creates its own unique ACTG sample (see Sequencer).", 24, contentY + 22)
-        love.graphics.print(string.format("Biomass in storage: %d", resources:get("biomass")), 24, contentY + 44)
-    else
+    if labTab == "sequencer" then
         local sample = currentSample()
 
-        -- sample navigation
         local pr, nr = labPrevRect(), labNextRect()
         drawLabButton(pr, "<", false, inRect(pr, mx, my))
         drawLabButton(nr, ">", false, inRect(nr, mx, my))
         love.graphics.setColor(1, 1, 1)
         local total = selectedLab and #selectedLab.samples or 0
-        love.graphics.print(string.format("Sample %d / %d", sample and labSampleIndex or 0, total), 392, 99)
+        love.graphics.print(string.format("Sample %d / %d", sample and labSampleIndex or 0, total), 632, 99)
 
         if not sample then
             love.graphics.setColor(0.7, 0.8, 0.9)
-            love.graphics.print("No samples yet. A scientist must bring 1 biomass from storage and work this lab.", 24, contentY + 20)
+            love.graphics.print("No active samples. Scientist must bring 1 biomass from storage before lab work.", 24, contentY + 20)
         else
-            local sb = labScanRect()
-            drawLabButton(sb, "Scan for TGA / TAG (R)", false, inRect(sb, mx, my))
-
             sample:draw(24, contentY, W - 48, contentH)
-
             local s = sample:stats()
             love.graphics.setColor(0.85, 0.9, 1.0)
-            love.graphics.print(string.format("Scans: %d   Genes intact: %d/%d   TGA found: %d/%d   TAG found: %d/%d   Revealed: %d/%d   Destroyed blocks: %d",
-                sample.presses, s.intact, s.genes, s.starts, s.genes, s.ends, s.genes, s.revealed, s.total, s.destroyed), 24, H - 52)
+            love.graphics.print(string.format("Mixed soup visible. Remaining bases: %d   Extracted: %d   Attempts: %d   Successes: %d",
+                s.remaining, s.removed, s.attempts, s.successes), 24, H - 52)
             love.graphics.setColor(1.0, 0.85, 0.5)
-            love.graphics.print(sample.lastLog, 24, H - 32)
+            love.graphics.print(sample.lastLog or "", 24, H - 32)
+        end
+    elseif labTab == "useful" then
+        love.graphics.setColor(0.8, 0.95, 0.8)
+        love.graphics.print("Useful Samples", 24, contentY)
+        local list = (selectedLab and selectedLab.usefulSamples) or {}
+        if #list == 0 then
+            love.graphics.setColor(0.7, 0.8, 0.9)
+            love.graphics.print("No extracted useful sequences yet.", 24, contentY + 26)
+        else
+            local y = contentY + 26
+            for i = #list, 1, -1 do
+                local e = list[i]
+                love.graphics.setColor(0.9, 1.0, 0.9)
+                love.graphics.print(string.format("#%d [%s %d] skill=%.2f seq=%s", i, e.kind or "row", e.index or 0, e.skill or 0, e.sequence or ""), 24, y)
+                y = y + 20
+                if y > H - 40 then break end
+            end
+        end
+    else
+        love.graphics.setColor(1.0, 0.8, 0.8)
+        love.graphics.print("Genetic Waste", 24, contentY)
+        local list = (selectedLab and selectedLab.geneticWaste) or {}
+        if #list == 0 then
+            love.graphics.setColor(0.7, 0.8, 0.9)
+            love.graphics.print("No discarded samples yet.", 24, contentY + 26)
+        else
+            local y = contentY + 26
+            for i = #list, 1, -1 do
+                local e = list[i]
+                love.graphics.setColor(1.0, 0.9, 0.9)
+                love.graphics.print(string.format("Waste #%d reason=%s remaining=%d", i, e.reason or "n/a", e.sample and e.sample:countAvailable() or 0), 24, y)
+                y = y + 20
+                if y > H - 40 then break end
+            end
         end
     end
+
+    love.graphics.setColor(0.7, 0.8, 0.9)
+    love.graphics.print(string.format("Biomass in storage: %d", resources:get("biomass")), 24, H - 22)
 
     -- X close button (top-right)
     local r = labCloseButtonRect()
@@ -529,9 +542,8 @@ local function drawLabScreen()
     love.graphics.line(r.x + r.w - 11, r.y + 11, r.x + 11, r.y + r.h - 11)
     love.graphics.setLineWidth(1)
 
-    -- hints
     love.graphics.setColor(0.6, 0.7, 0.8)
-    love.graphics.print("1/2: tabs   N: normals   R/Space: scan   Left/Right: sample   ESC or X: close", W - 520, H - 22)
+    love.graphics.print("1/2/3: tabs   Left/Right: sample   ESC or X: close", W - 420, H - 22)
 end
 
 function love.draw()
@@ -594,7 +606,7 @@ function love.draw()
             local used = item.amount or 0
             love.graphics.print(string.format("Box:%d%%", math.floor((used / total) * 100)), px, py)
         elseif item.kind == "lab" then
-            love.graphics.print(string.format("lab (%d)", #item.samples), px, py)
+            love.graphics.print(string.format("lab (active:%d useful:%d waste:%d)", #item.samples, #(item.usefulSamples or {}), #(item.geneticWaste or {})), px, py)
         else
             love.graphics.print(item.kind, px, py)
         end

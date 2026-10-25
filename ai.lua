@@ -55,6 +55,11 @@ function AI.chooseTask(agent, interactables)
         return not node.claimedBy
     end
 
+    local function labHasActiveSample(node)
+        if not labReady(node) then return false end
+        return node.samples and #node.samples > 0
+    end
+
     if agent.role == "miner" then
         if agent.resourceHeld then
             local storage = nearestInteractable(agent, interactables, storageReady)
@@ -69,8 +74,14 @@ function AI.chooseTask(agent, interactables)
         end
 
     elseif agent.role == "scientist" then
+        -- highest priority: process any active sample first
+        local labWithSample = nearestInteractable(agent, interactables, labHasActiveSample)
+        if labWithSample and labWithSample:claim(agent) then
+            return { type = "sequence", label = "Sequencing", target = labWithSample, kind = "lab", sampleIndex = 1 }
+        end
+
         if agent.hasBiomass then
-            -- carrying biomass: go work a lab
+            -- carrying biomass: go create a new sample
             local lab = nearestInteractable(agent, interactables, labReady)
             if lab and lab:claim(agent) then
                 return { type = "research", label = "Researching", target = lab, kind = "lab" }

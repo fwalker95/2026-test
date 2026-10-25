@@ -71,6 +71,7 @@ function Agent.new(x, y, role)
     self.resourceHeld = false
     self.hasBiomass = false -- scientists: carrying 1 biomass for lab work
     self.crowdCooldown = 0
+    self.scienceSkill = 0.45 + R.random() * 0.45
 
     self.idle = nil
     self.idleCooldown = R.random() * 1.5
@@ -364,11 +365,64 @@ function Agent:update(dt, cols, rows, grid, interactables, allAgents)
 
         if ttype == "research" then
             if target:work(self, dt) then
-                -- the biomass is consumed by the lab work
+                -- the biomass is consumed by the lab work to create a new sample
                 self.hasBiomass = false
                 target.researchCount = (target.researchCount or 0) + 1
                 self:finishTask(true)
             end
+            self._reservedCell = { x = self.x, y = self.y }
+            return
+        end
+
+        if ttype == "sequence" then
+            local sample = target.samples[task.sampleIndex or 1]
+            if not sample then
+                self.statusText = "No active sample"
+                self:finishTask(true)
+                return
+            end
+
+            self.harvestTimer = self.harvestTimer + dt
+            if self.harvestTimer >= (target.interactionTime or 1.0) then
+                self.harvestTimer = 0
+
+                local chooseRow = (R.random() < 0.5)
+                local kind = chooseRow and "row" or "column"
+                local index = chooseRow and R.random(1, sample.rows) or R.random(1, sample.cols)
+
+                sample.extractAttempts = (sample.extractAttempts or 0) + 1
+
+                local chance = math.min(0.95, (self.scienceSkill or 0.5) * 0.9)
+                if R.random() <= chance then
+                    local maxBases = 2 + math.floor((self.scienceSkill or 0.5) * 8)
+                    local seq = sample:extractLine(kind, index, maxBases)
+                    if seq and #seq > 0 then
+                        sample.extractSuccesses = (sample.extractSuccesses or 0) + 1
+                        target:addUsefulSequence({
+                            sequence = seq,
+                            kind = kind,
+                            index = index,
+                            skill = self.scienceSkill,
+                            sampleSeed = sample.seed,
+                            extractedAt = os.time(),
+                        })
+                        self.statusText = "Extracted useful sequence"
+                    else
+                        self.statusText = "No sequence found"
+                    end
+                else
+                    sample.lastLog = string.format("%s inspected %s %d: no useful hit", "Scientist", kind, index)
+                    self.statusText = "No useful hit"
+                end
+
+                local remaining = sample:countAvailable()
+                if remaining <= 0 or (sample.extractAttempts - sample.extractSuccesses) >= 3 then
+                    target:markSampleWaste(task.sampleIndex or 1, remaining <= 0 and "Sample exhausted" or "No more useful sequences")
+                    self.statusText = "Sample marked waste"
+                    self:finishTask(true)
+                end
+            end
+
             self._reservedCell = { x = self.x, y = self.y }
             return
         end

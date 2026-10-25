@@ -34,11 +34,13 @@ function Interactable.new(kind, x, y, opts)
         self.contents = (opts and opts.contents) or {}
     end
 
-    -- Labs: completed research count + one unique ACTG field per biomass used
+    -- Labs: completed research count + sample flow buckets
     if self.kind == "lab" then
         self.researchCount = 0
         self.samples = {}
         self.sampleSerial = 0
+        self.usefulSamples = {}
+        self.geneticWaste = {}
     end
 
     return self
@@ -133,7 +135,7 @@ function Interactable:removeItem(resourceKey, n)
     return true
 end
 
--- Labs: each biomass that gets used creates its own unique ACTG field.
+-- Labs: each biomass that gets used creates its own unique mixed-soup ACTG field.
 function Interactable:addSample()
     if self.kind ~= "lab" then return nil end
     self.sampleSerial = self.sampleSerial + 1
@@ -141,6 +143,28 @@ function Interactable:addSample()
     local sample = DNAField.new(40, 22, seed)
     self.samples[#self.samples + 1] = sample
     return sample
+end
+
+function Interactable:markSampleWaste(index, reason)
+    if self.kind ~= "lab" then return nil end
+    if not index or index < 1 or index > #self.samples then return nil end
+
+    local sample = table.remove(self.samples, index)
+    if not sample then return nil end
+
+    self.geneticWaste[#self.geneticWaste + 1] = {
+        sample = sample,
+        reason = reason or "No more useful sequences",
+        at = os.time(),
+    }
+
+    return sample
+end
+
+function Interactable:addUsefulSequence(entry)
+    if self.kind ~= "lab" then return false end
+    self.usefulSamples[#self.usefulSamples + 1] = entry
+    return true
 end
 
 function Interactable:work(agent, dt)
