@@ -4,6 +4,8 @@ local AI = require("ai")
 local Agent = {}
 Agent.__index = Agent
 
+local R = (love and love.math) or math
+
 local function manhattan(x1, y1, x2, y2)
     return math.abs(x1 - x2) + math.abs(y1 - y2)
 end
@@ -77,9 +79,10 @@ function Agent.new(x, y, role)
     }
     self.resourceHeld = false
     self.crowdCooldown = 0
-    self.wanderTarget = nil
-    self.chatPartner = nil
-    self.chatTimer = 0
+
+    -- idle state: { type = "wander"|"chat"|"smoke", timer, partner, role }
+    self.idle = nil
+    self.idleCooldown = R.random() * 1.5
 
     return self
 end
@@ -95,6 +98,175 @@ function Agent:chooseTask(interactables)
     return self.currentTask
 end
 
+-- Follows self.path one step per stepInterval. Returns a status note
+-- ("Making space" / "Yielding") when the agent had to sidestep or give up.
+function Agent:moveAlongPath(dt, cols, rows, grid, allAgents, goalX, goalY)
+    local note = nil
+    local reservations = Pathfinding.buildReservationMap(allAgents, self)
+    self.moveTimer = self.moveTimer + dt
+    local stepInterval = 1.0 / math.max(0.001, self.moveSpeed)
+
+    while self.moveTimer >= stepInterval and self.path and #self.path > 0 do
+        self.moveTimer = self.moveTimer - stepInterval
+        local nextCell = table.remove(self.path, 1)
+        local nextKey = cellKey(nextCell.x, nextCell.y)
+
+        if Pathfinding.isWalkable(grid, cols, rows, nextCell.x, nextCell.y)
+            and not reservations[nextKey]
+            and not isOccupiedByAgent(allAgents, self, nextCell.x, nextCell.y) then
+            self.x = nextCell.x
+            self.y = nextCell.y
+            self.targetRenderX = self.x - 0.5
+            self.targetRenderY = self.y - 0.5
+            self._reservedCell = { x = self.x, y = self.y }
+            reservations = Pathfinding.buildReservationMap(allAgents, self)
+        else
+            local alternative = Pathfinding.findBestAlternativeStep(self, grid, cols, rows, goalX or self.x, goalY or self.y, reservations)
+
+            if alternative
+                and Pathfinding.isWalkable(grid, cols, rows, alternative.x, alternative.y)
+                and not reservations[cellKey(alternative.x, alternative.y)]
+                and not isOccupiedByAgent(allAgents, self, alternative.x, alternative.y) then
+                self.x = alternative.x
+                self.y = alternative.y
+                self.targetRenderX = self.x - 0.5
+                self.targetRenderY = self.y - 0.5
+                note = "Making space"
+                self._reservedCell = { x = self.x, y = self.y }
+                reservations = Pathfinding.buildReservationMap(allAgents, self)
+            else
+                self.path = nil
+                note = "Yielding"
+                self.crowdCooldown = 0.25
+                self._reservedCell = { x = self.x, y = self.y }
+                break
+            end
+        end
+    end
+
+    return note
+end
+
+-- ===== Idle behaviour =====
+
+function Agent:endIdle(cooldown)
+    local idle = self.idle
+    if idle and idle.partner then
+        local p = idle.partner
+        if p.idle and p.idle.partner == self then
+            p.idle = nil
+            p.path = nil
+            p.idleCooldown = 1 + R.random() * 2
+        end
+    end
+    self.idle = nil
+    self.path = nil
+    self.idleCooldown = cooldown or (1 + R.random() * 2)
+end
+
+function Agent:beginIdle(choice, cols, rows, grid)
+    if choice.type == "smoke" then
+        self.idle = { type = "smoke", timer = 4 + R.random() * 4 }
+
+    elseif choice.type == "chat" and choice.partner then
+        local dur = 3 + R.random() * 3
+        local p = choice.partner
+        if p.idle then p:endIdle() end
+        p.path = nil
+        p.idle = { type = "chat", timer = dur, partner = self, role = "listener" }
+        self.idle = { type = "chat", timer = dur, partner = p, role = "initiator" }
+
+    else -- wander
+        local tries = 0
+        while tries < 8 do
+            tries = tries + 1
+            local tx = self.x + R.random(-6, 6)
+            local ty = self.y + R.random(-6, 6)
+            if (tx ~= self.x or ty ~= self.y) and Pathfinding.isWalkable(grid, cols, rows, tx, ty) then
+                local path = Pathfinding.findPath(grid, cols, rows, self.x, self.y, tx, ty)
+                if path and #path > 0 then
+                    self.path = path
+                    self.idle = { type = "wander", tx = tx, ty = ty }
+                    return
+                end
+            end
+        end
+        self.idle = nil
+        self.idleCooldown = 1
+    end
+end
+
+function Agent:updateIdle(dt, cols, rows, grid, allAgents)
+    self._reservedCell = { x = self.x, y = self.y }
+
+    if not self.idle then
+        self.idleCooldown = math.max(0, (self.idleCooldown or 0) - dt)
+        self.statusText = "Idle"
+        if self.idleCooldown > 0 then return end
+        self:beginIdle(AI.chooseIdle(self, allAgents), cols, rows, grid)
+        if not self.idle then return end
+    end
+
+    local idle = self.idle
+
+    if idle.type == "smoke" then
+        self.statusText = "Smoking"
+        idle.timer = idle.timer - dt
+        if idle.timer <= 0 then self:endIdle() end
+
+    elseif idle.type == "wander" then
+        self.statusText = "Wandering"
+        if self.path and #self.path > 0 then
+            self:moveAlongPath(dt, cols, rows, grid, allAgents, idle.tx, idle.ty)
+        end
+        if not self.path or #self.path == 0 then
+            self:endIdle()
+        end
+
+    elseif idle.type == "chat" then
+        self.statusText = "Chatting"
+        local p = idle.partner
+        if not p or not p.idle or p.idle.partner ~= self or p.currentTask then
+            self:endIdle()
+            return
+        end
+
+        if idle.role == "listener" then
+            self.path = nil
+            return
+        end
+
+        if manhattan(self.x, self.y, p.x, p.y) <= 2 then
+            self.path = nil
+            idle.timer = idle.timer - dt
+            if idle.timer <= 0 then self:endIdle() end
+        else
+            if not self.path or #self.path == 0 then
+                local found = nil
+                local neighbours = {
+                    { p.x + 1, p.y }, { p.x - 1, p.y }, { p.x, p.y + 1 }, { p.x, p.y - 1 },
+                }
+                for _, n in ipairs(neighbours) do
+                    if Pathfinding.isWalkable(grid, cols, rows, n[1], n[2])
+                        and not isOccupiedByAgent(allAgents, self, n[1], n[2]) then
+                        found = Pathfinding.findPath(grid, cols, rows, self.x, self.y, n[1], n[2])
+                        if found and #found > 0 then break end
+                        found = nil
+                    end
+                end
+                if not found then
+                    self:endIdle()
+                    return
+                end
+                self.path = found
+            end
+            self:moveAlongPath(dt, cols, rows, grid, allAgents, p.x, p.y)
+        end
+    end
+end
+
+-- ===== Main update =====
+
 function Agent:update(dt, cols, rows, grid, interactables, allAgents)
     dt = dt or 0.016
     self.crowdCooldown = math.max(0, self.crowdCooldown - dt)
@@ -104,12 +276,15 @@ function Agent:update(dt, cols, rows, grid, interactables, allAgents)
 
     if not self.currentTask then
         self:chooseTask(interactables)
+        if self.currentTask and self.idle then
+            -- work found: drop whatever we were doing in idle
+            self:endIdle(0)
+        end
     end
 
+    -- Nothing to do: idle (wander / chat / smoke)
     if not self.currentTask then
-        self.statusText = "Idle"
-        self.path = nil
-        self._reservedCell = { x = self.x, y = self.y }
+        self:updateIdle(dt, cols, rows, grid, allAgents)
         return
     end
 
@@ -171,44 +346,8 @@ function Agent:update(dt, cols, rows, grid, interactables, allAgents)
         end
     end
 
-    local reservations = Pathfinding.buildReservationMap(allAgents, self)
-    self.moveTimer = self.moveTimer + dt
-    local stepInterval = 1.0 / math.max(0.001, self.moveSpeed)
-
-    while self.moveTimer >= stepInterval and self.path and #self.path > 0 do
-        self.moveTimer = self.moveTimer - stepInterval
-        local nextCell = table.remove(self.path, 1)
-        local nextKey = cellKey(nextCell.x, nextCell.y)
-
-        if Pathfinding.isWalkable(grid, cols, rows, nextCell.x, nextCell.y) and not reservations[nextKey] and not isOccupiedByAgent(allAgents, self, nextCell.x, nextCell.y) then
-            self.x = nextCell.x
-            self.y = nextCell.y
-            self.targetRenderX = self.x - 0.5
-            self.targetRenderY = self.y - 0.5
-            self._reservedCell = { x = self.x, y = self.y }
-            reservations = Pathfinding.buildReservationMap(allAgents, self)
-        else
-            local goalX = target and target.x or self.x
-            local goalY = target and target.y or self.y
-            local alternative = Pathfinding.findBestAlternativeStep(self, grid, cols, rows, goalX, goalY, reservations)
-
-            if alternative and Pathfinding.isWalkable(grid, cols, rows, alternative.x, alternative.y) and not reservations[cellKey(alternative.x, alternative.y)] and not isOccupiedByAgent(allAgents, self, alternative.x, alternative.y) then
-                self.x = alternative.x
-                self.y = alternative.y
-                self.targetRenderX = self.x - 0.5
-                self.targetRenderY = self.y - 0.5
-                self.statusText = "Making space"
-                self._reservedCell = { x = self.x, y = self.y }
-                reservations = Pathfinding.buildReservationMap(allAgents, self)
-            else
-                self.path = nil
-                self.statusText = "Yielding"
-                self.crowdCooldown = 0.25
-                self._reservedCell = { x = self.x, y = self.y }
-                break
-            end
-        end
-    end
+    local note = self:moveAlongPath(dt, cols, rows, grid, allAgents, target.x, target.y)
+    if note then self.statusText = note end
 end
 
 return Agent

@@ -1,6 +1,6 @@
-local Pathfinding = require("pathfinding")
-
 local AI = {}
+
+local R = (love and love.math) or math
 
 local function manhattan(x1, y1, x2, y2)
     return math.abs(x1 - x2) + math.abs(y1 - y2)
@@ -25,6 +25,7 @@ local function nearestInteractable(agent, interactables, predicate)
     return best
 end
 
+-- Work goals (mine / deliver). Returns nil when there is nothing to do.
 function AI.chooseTask(agent, interactables)
     if not interactables then return nil end
 
@@ -36,7 +37,7 @@ function AI.chooseTask(agent, interactables)
     end
 
     local function storageReady(node)
-        if not node or node.kind ~= "box" and node.kind ~= "storage" then return false end
+        if not node or (node.kind ~= "box" and node.kind ~= "storage") then return false end
         if not node:canInteract(agent) then return false end
         if node.capacity == nil then return true end
         return (node.amount or 0) < node.capacity
@@ -71,6 +72,50 @@ function AI.chooseTask(agent, interactables)
     end
 
     return nil
+end
+
+-- Nearest other agent that is free to chat (not working, not already chatting).
+function AI.findChatPartner(agent, allAgents, maxDist)
+    maxDist = maxDist or 15
+    local best, bestDist = nil, math.huge
+
+    for _, other in ipairs(allAgents or {}) do
+        if other ~= agent
+            and not other.currentTask
+            and not (other.idle and other.idle.type == "chat") then
+            local d = manhattan(agent.x, agent.y, other.x, other.y)
+            if d <= maxDist and d < bestDist then
+                best, bestDist = other, d
+            end
+        end
+    end
+
+    return best
+end
+
+-- Idle goal: used only when there is no work. Weighted random pick.
+-- Returns { type = "wander" | "chat" | "smoke", partner = agent? }
+function AI.chooseIdle(agent, allAgents)
+    local partner = AI.findChatPartner(agent, allAgents)
+
+    local options = {
+        { type = "wander", weight = 5 },
+        { type = "smoke", weight = 3 },
+    }
+    if partner then
+        table.insert(options, { type = "chat", weight = 4, partner = partner })
+    end
+
+    local total = 0
+    for _, o in ipairs(options) do total = total + o.weight end
+
+    local roll = R.random() * total
+    for _, o in ipairs(options) do
+        roll = roll - o.weight
+        if roll <= 0 then return o end
+    end
+
+    return options[1]
 end
 
 return AI
