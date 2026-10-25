@@ -80,7 +80,6 @@ function Agent.new(x, y, role)
     self.resourceHeld = false
     self.crowdCooldown = 0
 
-    -- idle state: { type = "wander"|"chat"|"smoke", timer, partner, role }
     self.idle = nil
     self.idleCooldown = R.random() * 1.5
 
@@ -98,8 +97,24 @@ function Agent:chooseTask(interactables)
     return self.currentTask
 end
 
--- Follows self.path one step per stepInterval. Returns a status note
--- ("Making space" / "Yielding") when the agent had to sidestep or give up.
+function Agent:draw(cellSize)
+    local px = (self.renderX - 0.5) * cellSize
+    local py = (self.renderY - 0.5) * cellSize
+
+    if self.image then
+        love.graphics.setColor(1, 1, 1)
+        local sx = cellSize / self.image:getWidth()
+        local sy = cellSize / self.image:getHeight()
+        love.graphics.draw(self.image, px, py, 0, sx, sy)
+    else
+        love.graphics.setColor(0.2, 1, 0.3)
+        love.graphics.rectangle("fill", px, py, cellSize - 1, cellSize - 1)
+    end
+
+    love.graphics.setColor(1, 1, 1)
+    love.graphics.print(self.statusText or "Idle", px - 10, py - 18)
+end
+
 function Agent:moveAlongPath(dt, cols, rows, grid, allAgents, goalX, goalY)
     local note = nil
     local reservations = Pathfinding.buildReservationMap(allAgents, self)
@@ -147,8 +162,6 @@ function Agent:moveAlongPath(dt, cols, rows, grid, allAgents, goalX, goalY)
     return note
 end
 
--- ===== Idle behaviour =====
-
 function Agent:endIdle(cooldown)
     local idle = self.idle
     if idle and idle.partner then
@@ -176,7 +189,7 @@ function Agent:beginIdle(choice, cols, rows, grid)
         p.idle = { type = "chat", timer = dur, partner = self, role = "listener" }
         self.idle = { type = "chat", timer = dur, partner = p, role = "initiator" }
 
-    else -- wander
+    else
         local tries = 0
         while tries < 8 do
             tries = tries + 1
@@ -265,8 +278,6 @@ function Agent:updateIdle(dt, cols, rows, grid, allAgents)
     end
 end
 
--- ===== Main update =====
-
 function Agent:update(dt, cols, rows, grid, interactables, allAgents)
     dt = dt or 0.016
     self.crowdCooldown = math.max(0, self.crowdCooldown - dt)
@@ -277,12 +288,10 @@ function Agent:update(dt, cols, rows, grid, interactables, allAgents)
     if not self.currentTask then
         self:chooseTask(interactables)
         if self.currentTask and self.idle then
-            -- work found: drop whatever we were doing in idle
             self:endIdle(0)
         end
     end
 
-    -- Nothing to do: idle (wander / chat / smoke)
     if not self.currentTask then
         self:updateIdle(dt, cols, rows, grid, allAgents)
         return

@@ -3,6 +3,7 @@ local Agent = require("agent")
 local Interactable = require("interactable")
 local Camera = require("camera")
 local Resources = require("resources")
+local AssetManager = require("asset_manager")
 
 local function listAgentsMenu(agents)
     local items = {}
@@ -142,6 +143,11 @@ function love.load()
     table.insert(agents, Agent.new(10, 15, "miner"))
     table.insert(agents, Agent.new(12, 17, "miner"))
 
+    assets = AssetManager.new()
+    for _, a in ipairs(agents) do
+        assets:assignImage(a, "agent")
+    end
+
     selectedTool = "resource"
     menuRect = { x = 10, y = 10, w = 150, h = 80 }
 
@@ -269,7 +275,9 @@ function love.keypressed(key)
                 end
             end
             if not occupied then
-                table.insert(agents, Agent.new(cx, cy, "miner"))
+                local newAgent = Agent.new(cx, cy, "miner")
+                assets:assignImage(newAgent, "agent")
+                table.insert(agents, newAgent)
             end
         end
     end
@@ -423,19 +431,12 @@ function love.draw()
         end
     end
 
-    love.graphics.setColor(0.2, 1, 0.3)
     for _, agent in ipairs(agents) do
-        local px = (agent.renderX - 0.5) * cellSize
-        local py = (agent.renderY - 0.5) * cellSize
-        love.graphics.rectangle("fill", px, py, cellSize - 1, cellSize - 1)
-        love.graphics.setColor(1, 1, 1)
-        love.graphics.print(agent.statusText, px - 10, py - 18)
-        love.graphics.setColor(0.2, 1, 0.3)
+        agent:draw(cellSize)
     end
 
     camera:detach()
 
-    -- UI in screen space
     love.graphics.setColor(0.12, 0.12, 0.18, 0.9)
     love.graphics.rectangle("fill", menuRect.x, menuRect.y, menuRect.w, menuRect.h)
 
@@ -459,7 +460,6 @@ function love.draw()
         agentMenu:draw()
     end
 
-    -- Resource HUD panel
     if resources then
         resources:draw(10, 150)
     end
