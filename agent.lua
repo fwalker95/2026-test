@@ -35,7 +35,11 @@ local function getTaskTile(target, fromX, fromY)
 
     if target.isLegalWorkPosition and type(target.isLegalWorkPosition) == "function" then
         local legal = nil
-        for _, tile in ipairs(target:getWorkTiles and target:getWorkTiles() or {}) do
+        local workTiles = {}
+        if target.getWorkTiles and type(target.getWorkTiles) == "function" then
+            workTiles = target:getWorkTiles() or {}
+        end
+        for _, tile in ipairs(workTiles) do
             if tile and tile.x and tile.y then
                 if not legal or (manhattan(fromX, fromY, tile.x, tile.y) < manhattan(fromX, fromY, legal.x, legal.y)) then
                     legal = tile
