@@ -2,21 +2,15 @@
 local Agent = require("agent")
 local Interactable = require("interactable")
 local Camera = require("camera")
-local AssetManager = require("asset_manager")
-
-local kindImageKeys = { mine = "resource", box = "box" }
-
-local function drawImageInCell(image, px, py, size)
-    love.graphics.setColor(1, 1, 1)
-    love.graphics.draw(image, px, py, 0, size / image:getWidth(), size / image:getHeight())
-end
+local Resources = require("resources")
 
 local function listAgentsMenu(agents)
     local items = {}
     for i, agent in ipairs(agents) do
         local status = agent.statusText or "Idle"
-        local holding = agent.worldState and tostring(agent.worldState.hasResource) or "false"
-        table.insert(items, string.format("Agent %d: (%d,%d) %s hold=%s", i, agent.x, agent.y, status, holding))
+        local holding = agent.resourceHeld and "yes" or "no"
+        local carried = agent.carriedType or "none"
+        table.insert(items, string.format("Agent %d: (%d,%d) %s hold=%s carry=%s", i, agent.x, agent.y, status, holding, carried))
     end
     return items
 end
@@ -113,7 +107,8 @@ function AgentListMenu:new(x, y, w)
         for i, agent in ipairs(agents) do
             local status = agent.statusText or "Idle"
             local holding = agent.resourceHeld and "yes" or "no"
-            local label = string.format("Agent %d: (%d,%d) %s hold=%s", i, agent.x, agent.y, status, holding)
+            local carried = agent.carriedType or "none"
+            local label = string.format("Agent %d: (%d,%d) %s hold=%s carry=%s", i, agent.x, agent.y, status, holding, carried)
             table.insert(self.items, {
                 label = label,
                 callback = function() end
@@ -135,20 +130,17 @@ function love.load()
     end
 
     interactables = {
-        Interactable.new("mine", 30, 15, { allowedRoles = { "miner" }, resourceLeft = 5, interactionTime = 1.5 }),
-        Interactable.new("mine", 27, 20, { allowedRoles = { "miner" }, resourceLeft = 5, interactionTime = 1.5 }),
+        Interactable.new("mine", 30, 15, { allowedRoles = { "miner" }, resourceLeft = 5, interactionTime = 1.5, resourceType = "biomass" }),
+        Interactable.new("mine", 27, 20, { allowedRoles = { "miner" }, resourceLeft = 5, interactionTime = 1.5, resourceType = "dna" }),
         Interactable.new("box", 20, 15, { allowedRoles = { "miner" }, capacity = 10, amount = 0, interactionTime = 1.0 }),
     }
 
-    assets = AssetManager.new()
-    for _, item in ipairs(interactables) do
-        assets:assignImage(item, kindImageKeys[item.kind])
-    end
+    resources = Resources.new()
+    resources:recount(interactables)
 
     agents = {}
     table.insert(agents, Agent.new(10, 15, "miner"))
     table.insert(agents, Agent.new(12, 17, "miner"))
-    assets:assignAll({ agents = agents })
 
     selectedTool = "resource"
     menuRect = { x = 10, y = 10, w = 150, h = 80 }
@@ -157,7 +149,7 @@ function love.load()
         agentMenu.visible = not agentMenu.visible
     end)
 
-    agentMenu = AgentListMenu:new(190, 100, 360)
+    agentMenu = AgentListMenu:new(190, 100, 420)
     agentMenu:refresh(agents)
 
     local worldW = cols * cellSize
@@ -175,7 +167,6 @@ function love.update(dt)
     if love.mouse.isDown(1) then
         local mx, my = love.mouse.getPosition()
 
-        -- UI is screen space (not camera-translated)
         if agentButton:contains(mx, my) then
             return
         end
@@ -205,6 +196,7 @@ function love.update(dt)
                         table.remove(interactables, i)
                     end
                 end
+                resources:recount(interactables)
                 return
             end
 
@@ -228,6 +220,7 @@ function love.update(dt)
                         resourceLeft = 5,
                         interactionTime = 1.5,
                     }))
+                    resources:recount(interactables)
                 end
             elseif selectedTool == "box" then
                 local occupied = false
@@ -250,6 +243,7 @@ function love.update(dt)
                         amount = 0,
                         interactionTime = 1.0,
                     }))
+                    resources:recount(interactables)
                 end
             end
         end
@@ -258,6 +252,8 @@ function love.update(dt)
     for _, agent in ipairs(agents) do
         agent:update(dt, cols, rows, grid, interactables, agents)
     end
+
+    resources:recount(interactables)
 end
 
 function love.keypressed(key)
@@ -273,9 +269,7 @@ function love.keypressed(key)
                 end
             end
             if not occupied then
-                local newAgent = Agent.new(cx, cy, "miner")
-                assets:assignImage(newAgent, "agent")
-                table.insert(agents, newAgent)
+                table.insert(agents, Agent.new(cx, cy, "miner"))
             end
         end
     end
@@ -321,6 +315,7 @@ function love.mousepressed(x, y, button)
                     table.remove(interactables, i)
                 end
             end
+            resources:recount(interactables)
             return
         end
 
@@ -344,6 +339,7 @@ function love.mousepressed(x, y, button)
                     resourceLeft = 5,
                     interactionTime = 1.5,
                 }))
+                resources:recount(interactables)
             end
         elseif selectedTool == "box" then
             local occupied = false
@@ -366,6 +362,7 @@ function love.mousepressed(x, y, button)
                     amount = 0,
                     interactionTime = 1.0,
                 }))
+                resources:recount(interactables)
             end
         end
     end
@@ -391,10 +388,6 @@ function love.draw()
                 end
             end
 
-            local tileImage = assets:get(grid[x][y] == 1 and "wall" or "ground")
-            if tileImage and not isInteractable then
-                drawImageInCell(tileImage, px, py, cellSize)
-            else
             if isInteractable then
                 love.graphics.setColor(0.25, 0.25, 0.25)
             elseif grid[x][y] == 1 then
@@ -404,17 +397,10 @@ function love.draw()
             end
 
             love.graphics.rectangle("fill", px, py, cellSize - 1, cellSize - 1)
-            end
         end
     end
 
     for _, item in ipairs(interactables) do
-        if not item.image and kindImageKeys[item.kind] then
-            assets:assignImage(item, kindImageKeys[item.kind])
-        end
-        if item.image then
-            drawImageInCell(item.image, (item.x - 1) * cellSize, (item.y - 1) * cellSize, cellSize)
-        end
         local px = (item.x - 1) * cellSize + 2
         local py = (item.y - 1) * cellSize - 14
         love.graphics.setColor(1, 1, 1)
@@ -425,7 +411,8 @@ function love.draw()
                 local total = 5
                 percent = math.floor((item.resourceLeft / total) * 100)
             end
-            love.graphics.print(string.format("Mine:%d%%", percent), px, py)
+            local typeLabel = item.resourceType or "unknown"
+            love.graphics.print(string.format("Mine:%d%% (%s)", percent, typeLabel), px, py)
         elseif item.kind == "box" then
             local total = item.capacity or 1
             local used = item.amount or 0
@@ -436,15 +423,11 @@ function love.draw()
         end
     end
 
+    love.graphics.setColor(0.2, 1, 0.3)
     for _, agent in ipairs(agents) do
         local px = (agent.renderX - 0.5) * cellSize
         local py = (agent.renderY - 0.5) * cellSize
-        if agent.image then
-            drawImageInCell(agent.image, px, py, cellSize)
-        else
-            love.graphics.setColor(0.2, 1, 0.3)
-            love.graphics.rectangle("fill", px, py, cellSize - 1, cellSize - 1)
-        end
+        love.graphics.rectangle("fill", px, py, cellSize - 1, cellSize - 1)
         love.graphics.setColor(1, 1, 1)
         love.graphics.print(agent.statusText, px - 10, py - 18)
         love.graphics.setColor(0.2, 1, 0.3)
@@ -474,6 +457,11 @@ function love.draw()
     agentButton:draw()
     if agentMenu then
         agentMenu:draw()
+    end
+
+    -- Resource HUD panel
+    if resources then
+        resources:draw(10, 150)
     end
 
     love.graphics.setColor(1, 1, 1)
