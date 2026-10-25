@@ -22,6 +22,7 @@ function AssetManager:loadImage(key, path)
     end)
 
     if not ok then
+        print("AssetManager: failed to load image '" .. tostring(path) .. "': " .. tostring(image))
         return nil
     end
 

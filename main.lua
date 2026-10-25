@@ -2,6 +2,14 @@
 local Agent = require("agent")
 local Interactable = require("interactable")
 local Camera = require("camera")
+local AssetManager = require("asset_manager")
+
+local kindImageKeys = { mine = "resource", box = "box" }
+
+local function drawImageInCell(image, px, py, size)
+    love.graphics.setColor(1, 1, 1)
+    love.graphics.draw(image, px, py, 0, size / image:getWidth(), size / image:getHeight())
+end
 
 local function listAgentsMenu(agents)
     local items = {}
@@ -132,9 +140,15 @@ function love.load()
         Interactable.new("box", 20, 15, { allowedRoles = { "miner" }, capacity = 10, amount = 0, interactionTime = 1.0 }),
     }
 
+    assets = AssetManager.new()
+    for _, item in ipairs(interactables) do
+        assets:assignImage(item, kindImageKeys[item.kind])
+    end
+
     agents = {}
     table.insert(agents, Agent.new(10, 15, "miner"))
     table.insert(agents, Agent.new(12, 17, "miner"))
+    assets:assignAll({ agents = agents })
 
     selectedTool = "resource"
     menuRect = { x = 10, y = 10, w = 150, h = 80 }
@@ -259,7 +273,9 @@ function love.keypressed(key)
                 end
             end
             if not occupied then
-                table.insert(agents, Agent.new(cx, cy, "miner"))
+                local newAgent = Agent.new(cx, cy, "miner")
+                assets:assignImage(newAgent, "agent")
+                table.insert(agents, newAgent)
             end
         end
     end
@@ -375,6 +391,10 @@ function love.draw()
                 end
             end
 
+            local tileImage = assets:get(grid[x][y] == 1 and "wall" or "ground")
+            if tileImage and not isInteractable then
+                drawImageInCell(tileImage, px, py, cellSize)
+            else
             if isInteractable then
                 love.graphics.setColor(0.25, 0.25, 0.25)
             elseif grid[x][y] == 1 then
@@ -384,10 +404,17 @@ function love.draw()
             end
 
             love.graphics.rectangle("fill", px, py, cellSize - 1, cellSize - 1)
+            end
         end
     end
 
     for _, item in ipairs(interactables) do
+        if not item.image and kindImageKeys[item.kind] then
+            assets:assignImage(item, kindImageKeys[item.kind])
+        end
+        if item.image then
+            drawImageInCell(item.image, (item.x - 1) * cellSize, (item.y - 1) * cellSize, cellSize)
+        end
         local px = (item.x - 1) * cellSize + 2
         local py = (item.y - 1) * cellSize - 14
         love.graphics.setColor(1, 1, 1)
@@ -409,11 +436,15 @@ function love.draw()
         end
     end
 
-    love.graphics.setColor(0.2, 1, 0.3)
     for _, agent in ipairs(agents) do
         local px = (agent.renderX - 0.5) * cellSize
         local py = (agent.renderY - 0.5) * cellSize
-        love.graphics.rectangle("fill", px, py, cellSize - 1, cellSize - 1)
+        if agent.image then
+            drawImageInCell(agent.image, px, py, cellSize)
+        else
+            love.graphics.setColor(0.2, 1, 0.3)
+            love.graphics.rectangle("fill", px, py, cellSize - 1, cellSize - 1)
+        end
         love.graphics.setColor(1, 1, 1)
         love.graphics.print(agent.statusText, px - 10, py - 18)
         love.graphics.setColor(0.2, 1, 0.3)
