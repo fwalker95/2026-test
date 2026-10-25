@@ -126,9 +126,9 @@ function UI.update(state, agents)
     end
 end
 
-function UI.handleLeftClick(state, x, y)
+function UI.handleLeftClick(state, x, y, held)
     if state.agentButton:contains(x, y) then
-        state.agentButton.onClick()
+        if not held then state.agentButton.onClick() end
         return true
     end
 
