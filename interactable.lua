@@ -1,4 +1,6 @@
 -- interactable.lua
+local Resources = require("resources")
+
 local Interactable = {}
 Interactable.__index = Interactable
 
@@ -19,6 +21,18 @@ function Interactable.new(kind, x, y, opts)
     self.capacity = (opts and opts.capacity) or nil
     self.amount = (opts and opts.amount) or 0
     self.workTiles = nil
+
+    -- What a mine produces (biomass, funds, volatile, acids, dna)
+    if self.kind == "mine" then
+        local t = opts and opts.resourceType
+        self.resourceType = Resources.isValid(t) and t or Resources.randomType()
+    end
+
+    -- What a box holds: { [resourceKey] = count }
+    if self.kind == "box" or self.kind == "storage" then
+        self.contents = (opts and opts.contents) or {}
+    end
+
     return self
 end
 
@@ -93,6 +107,14 @@ function Interactable:release()
     self.claimedBy = nil
 end
 
+-- Store an item of a given type in this box.
+function Interactable:addItem(resourceKey, n)
+    if not self.contents then return false end
+    if not Resources.isValid(resourceKey) then return false end
+    self.contents[resourceKey] = (self.contents[resourceKey] or 0) + (n or 1)
+    return true
+end
+
 function Interactable:work(agent, dt)
     if not agent then return false end
     if not self.enabled then return false end
@@ -109,9 +131,18 @@ function Interactable:work(agent, dt)
     if self.progress >= self.interactionTime then
         if self.resourceLeft ~= nil then
             self.resourceLeft = math.max(0, self.resourceLeft - 1)
+            -- agent picks up what this mine produces
+            if self.resourceType then
+                agent.carriedType = self.resourceType
+            end
         end
         if self.capacity ~= nil then
             self.amount = math.min(self.capacity, (self.amount or 0) + 1)
+            -- agent drops off what it was carrying into this box
+            if self.contents then
+                self:addItem(agent.carriedType or "biomass", 1)
+                agent.carriedType = nil
+            end
         end
         self.progress = 0
         return true
