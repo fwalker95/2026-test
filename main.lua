@@ -6,7 +6,7 @@ local Resources = require("resources")
 local AssetManager = require("asset_manager")
 local LabSphere = require("lab_sphere")
 
-local kindImageKeys = { mine = "resource", box = "box", lab = "lab" }
+local kindImageKeys = { mine = "resource", box = "box", lab = "lab", gene_bank = "box" }
 
 -- boxes can be used by miners (deliver) and scientists (take biomass)
 local BOX_ROLES = { "miner", "scientist" }
@@ -118,8 +118,11 @@ function AgentListMenu:new(x, y, w)
 
         for i, agent in ipairs(agents) do
             local status = agent.statusText or "Idle"
-            local holding = (agent.resourceHeld or agent.hasBiomass) and "yes" or "no"
-            local carried = agent.carriedType or (agent.hasBiomass and "biomass") or "none"
+            local holding = (agent.resourceHeld or agent.hasBiomass or agent.carriedDNASample) and "yes" or "no"
+            local carried = agent.carriedType
+                or (agent.hasBiomass and "biomass")
+                or (agent.carriedDNASample and "dna_signature")
+                or "none"
             local label = string.format("%d [%s]: (%d,%d) %s hold=%s carry=%s", i, agent.role, agent.x, agent.y, status, holding, carried)
             table.insert(self.items, { label = label, callback = function() end })
         end
@@ -131,6 +134,7 @@ local toolItems = {
     { name = "resource", label = "Resource" },
     { name = "box", label = "Box" },
     { name = "lab", label = "Lab" },
+    { name = "gene_bank", label = "Gene Bank" },
     { name = "erase", label = "Erase" },
 }
 
@@ -196,6 +200,13 @@ local function placeAt(cx, cy, pressed)
         table.insert(interactables, Interactable.new("lab", cx, cy, {
             allowedRoles = { "scientist" },
             interactionTime = 3.0,
+        }))
+    elseif selectedTool == "gene_bank" then
+        table.insert(interactables, Interactable.new("gene_bank", cx, cy, {
+            allowedRoles = { "scientist" },
+            capacity = 100,
+            amount = 0,
+            interactionTime = 1.0,
         }))
     end
     resources:recount(interactables)
@@ -300,6 +311,7 @@ function love.load()
         Interactable.new("mine", 27, 20, { allowedRoles = { "miner" }, resourceLeft = 5, interactionTime = 1.5, resourceType = "dna" }),
         Interactable.new("box", 20, 15, { allowedRoles = BOX_ROLES, capacity = 10, amount = 0, interactionTime = 1.0 }),
         Interactable.new("lab", 20, 22, { allowedRoles = { "scientist" }, interactionTime = 3.0 }),
+        Interactable.new("gene_bank", 24, 22, { allowedRoles = { "scientist" }, capacity = 100, amount = 0, interactionTime = 1.0 }),
     }
 
     resources = Resources.new()
@@ -504,7 +516,7 @@ local function drawLabScreen()
             for i = #list, 1, -1 do
                 local e = list[i]
                 love.graphics.setColor(0.9, 1.0, 0.9)
-                love.graphics.print(string.format("#%d [%s %d] skill=%.2f seq=%s", i, e.kind or "row", e.index or 0, e.skill or 0, e.sequence or ""), 24, y)
+                love.graphics.print(string.format("#%d [%s %d] skill=%.2f len=%d seq=%s", i, e.kind or "row", e.index or 0, e.skill or 0, #(e.sequence or ""), e.sequence or ""), 24, y)
                 y = y + 20
                 if y > H - 40 then break end
             end
@@ -605,6 +617,10 @@ function love.draw()
             local total = item.capacity or 1
             local used = item.amount or 0
             love.graphics.print(string.format("Box:%d%%", math.floor((used / total) * 100)), px, py)
+        elseif item.kind == "gene_bank" then
+            local dnaCount = (item.contents and item.contents.dna) or 0
+            local sigs = #(item.dnaSignatures or {})
+            love.graphics.print(string.format("GeneBank DNA:%d sig:%d", dnaCount, sigs), px, py)
         elseif item.kind == "lab" then
             love.graphics.print(string.format("lab (active:%d useful:%d waste:%d)", #item.samples, #(item.usefulSamples or {}), #(item.geneticWaste or {})), px, py)
         else

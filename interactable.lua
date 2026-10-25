@@ -34,6 +34,14 @@ function Interactable.new(kind, x, y, opts)
         self.contents = (opts and opts.contents) or {}
     end
 
+    -- Gene banks hold persisted DNA sample signatures
+    if self.kind == "gene_bank" then
+        self.contents = (opts and opts.contents) or {}
+        self.dnaSignatures = (opts and opts.dnaSignatures) or {}
+        self.capacity = (opts and opts.capacity) or 100
+        self.amount = (opts and opts.amount) or 0
+    end
+
     -- Labs: completed research count + sample flow buckets
     if self.kind == "lab" then
         self.researchCount = 0
@@ -117,21 +125,30 @@ function Interactable:release()
     self.claimedBy = nil
 end
 
--- Store an item of a given type in this box.
+-- Store an item of a given type in this node.
 function Interactable:addItem(resourceKey, n)
     if not self.contents then return false end
     if not Resources.isValid(resourceKey) then return false end
     self.contents[resourceKey] = (self.contents[resourceKey] or 0) + (n or 1)
+    self.amount = (self.amount or 0) + (n or 1)
     return true
 end
 
--- Take items out of this box. Returns true only if enough were available.
+-- Take items out of this node. Returns true only if enough were available.
 function Interactable:removeItem(resourceKey, n)
     if not self.contents then return false end
     n = n or 1
     if (self.contents[resourceKey] or 0) < n then return false end
     self.contents[resourceKey] = self.contents[resourceKey] - n
     self.amount = math.max(0, (self.amount or 0) - n)
+    return true
+end
+
+function Interactable:addDNASignature(sampleRecord)
+    if self.kind ~= "gene_bank" then return false end
+    if not sampleRecord then return false end
+    self.dnaSignatures[#self.dnaSignatures + 1] = sampleRecord
+    self:addItem("dna", 1)
     return true
 end
 
@@ -188,7 +205,7 @@ function Interactable:work(agent, dt)
                 agent.carriedType = self.resourceType
             end
         end
-        if self.capacity ~= nil then
+        if self.capacity ~= nil and self.kind ~= "gene_bank" then
             self.amount = math.min(self.capacity, (self.amount or 0) + 1)
             -- agent drops off what it was carrying into this box
             if self.contents then

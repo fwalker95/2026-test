@@ -70,6 +70,7 @@ function Agent.new(x, y, role)
     }
     self.resourceHeld = false
     self.hasBiomass = false -- scientists: carrying 1 biomass for lab work
+    self.carriedDNASample = nil -- full sequence signature payload to gene bank
     self.crowdCooldown = 0
     self.scienceSkill = 0.45 + R.random() * 0.45
 
@@ -109,6 +110,12 @@ function Agent:draw(cellSize)
     if self.hasBiomass then
         love.graphics.setColor(0.4, 0.9, 0.3)
         love.graphics.circle("fill", px + cellSize - 4, py + 4, 3)
+    end
+
+    -- blue dot when carrying DNA signature sample
+    if self.carriedDNASample then
+        love.graphics.setColor(0.5, 0.75, 1.0)
+        love.graphics.circle("fill", px + cellSize - 10, py + 4, 3)
     end
 
     love.graphics.setColor(1, 1, 1)
@@ -400,15 +407,19 @@ function Agent:update(dt, cols, rows, grid, interactables, allAgents)
                 local chance = math.min(0.95, (self.scienceSkill or 0.5) * 0.9)
                 if seq and #seq > 0 and R.random() <= chance then
                     sample.extractSuccesses = (sample.extractSuccesses or 0) + 1
-                    target:addUsefulSequence({
+                    local payload = {
                         sequence = seq,
                         kind = kind,
                         index = index,
                         skill = self.scienceSkill,
                         sampleSeed = sample.seed,
                         extractedAt = os.time(),
-                    })
-                    self.statusText = "Extracted useful sequence"
+                    }
+                    target:addUsefulSequence(payload)
+                    self.carriedDNASample = payload
+                    self.statusText = "Carrying DNA sample"
+                    self:finishTask(true)
+                    return
                 else
                     sample.lastLog = string.format("Scientist inspected %s %d, no useful extraction", kind, index)
                     self.statusText = "No useful hit"
@@ -426,6 +437,22 @@ function Agent:update(dt, cols, rows, grid, interactables, allAgents)
                 end
             end
 
+            self._reservedCell = { x = self.x, y = self.y }
+            return
+        end
+
+        if ttype == "deposit_dna" then
+            self.fetchTimer = self.fetchTimer + dt
+            if self.fetchTimer >= (target.interactionTime or 1.0) then
+                if self.carriedDNASample then
+                    target:addDNASignature(self.carriedDNASample)
+                    self.carriedDNASample = nil
+                    self.statusText = "DNA deposited"
+                else
+                    self.statusText = "No DNA sample"
+                end
+                self:finishTask(true)
+            end
             self._reservedCell = { x = self.x, y = self.y }
             return
         end

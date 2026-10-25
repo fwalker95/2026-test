@@ -60,6 +60,12 @@ function AI.chooseTask(agent, interactables)
         return node.samples and #node.samples > 0
     end
 
+    local function geneBankReady(node)
+        if not node or node.kind ~= "gene_bank" then return false end
+        if not node:canInteract(agent) then return false end
+        return not node.claimedBy
+    end
+
     if agent.role == "miner" then
         if agent.resourceHeld then
             local storage = nearestInteractable(agent, interactables, storageReady)
@@ -74,6 +80,14 @@ function AI.chooseTask(agent, interactables)
         end
 
     elseif agent.role == "scientist" then
+        -- if carrying a DNA signature sample, deliver it first
+        if agent.carriedDNASample then
+            local bank = nearestInteractable(agent, interactables, geneBankReady)
+            if bank and bank:claim(agent) then
+                return { type = "deposit_dna", label = "Depositing DNA sample", target = bank, kind = "gene_bank" }
+            end
+        end
+
         -- highest priority: process any active sample first
         local labWithSample = nearestInteractable(agent, interactables, labHasActiveSample)
         if labWithSample and labWithSample:claim(agent) then
