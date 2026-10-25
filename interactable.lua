@@ -1,5 +1,6 @@
 -- interactable.lua
 local Resources = require("resources")
+local DNAField = require("dna_field")
 
 local Interactable = {}
 Interactable.__index = Interactable
@@ -33,9 +34,11 @@ function Interactable.new(kind, x, y, opts)
         self.contents = (opts and opts.contents) or {}
     end
 
-    -- Completed research cycles (labs)
+    -- Labs: completed research count + one unique ACTG field per biomass used
     if self.kind == "lab" then
         self.researchCount = 0
+        self.samples = {}
+        self.sampleSerial = 0
     end
 
     return self
@@ -130,6 +133,16 @@ function Interactable:removeItem(resourceKey, n)
     return true
 end
 
+-- Labs: each biomass that gets used creates its own unique ACTG field.
+function Interactable:addSample()
+    if self.kind ~= "lab" then return nil end
+    self.sampleSerial = self.sampleSerial + 1
+    local seed = os.time() + math.floor(love.timer.getTime() * 100000) + self.sampleSerial * 7919 + self.x * 31 + self.y * 17
+    local sample = DNAField.new(40, 22, seed)
+    self.samples[#self.samples + 1] = sample
+    return sample
+end
+
 function Interactable:work(agent, dt)
     if not agent then return false end
     if not self.enabled then return false end
@@ -158,6 +171,9 @@ function Interactable:work(agent, dt)
                 self:addItem(agent.carriedType or "biomass", 1)
                 agent.carriedType = nil
             end
+        end
+        if self.kind == "lab" then
+            self:addSample()
         end
         self.progress = 0
         return true

@@ -5,7 +5,6 @@ local Camera = require("camera")
 local Resources = require("resources")
 local AssetManager = require("asset_manager")
 local LabSphere = require("lab_sphere")
-local DNAField = require("dna_field")
 
 local kindImageKeys = { mine = "resource", box = "box", lab = "lab" }
 
@@ -203,6 +202,12 @@ local function placeAt(cx, cy, pressed)
 end
 
 -- Lab menu (full-window screen with tabs)
+local function currentSample()
+    if not selectedLab or #selectedLab.samples == 0 then return nil end
+    labSampleIndex = math.max(1, math.min(labSampleIndex, #selectedLab.samples))
+    return selectedLab.samples[labSampleIndex]
+end
+
 local function closeLabMenu()
     labMenuOpen = false
     selectedLab = nil
@@ -212,6 +217,17 @@ local function openLabMenu(lab)
     selectedLab = lab
     labMenuOpen = true
     labTab = "overview"
+    labSampleIndex = math.max(1, #lab.samples)
+end
+
+local function stepSample(delta)
+    if not selectedLab or #selectedLab.samples == 0 then return end
+    labSampleIndex = ((labSampleIndex - 1 + delta) % #selectedLab.samples) + 1
+end
+
+local function scanCurrentSample()
+    local s = currentSample()
+    if s then s:scan() end
 end
 
 local function labCloseButtonRect()
@@ -226,10 +242,13 @@ local function labTabRects()
     }
 end
 
-local function labRegenRect()
+local function labScanRect()
     local w = love.graphics.getWidth()
-    return { x = w - 190, y = 90, w = 166, h = 32 }
+    return { x = w - 230, y = 90, w = 206, h = 32 }
 end
+
+local function labPrevRect() return { x = 340, y = 90, w = 36, h = 32 } end
+local function labNextRect() return { x = 500, y = 90, w = 36, h = 32 } end
 
 local function inRect(r, x, y)
     return x >= r.x and x <= r.x + r.w and y >= r.y and y <= r.y + r.h
@@ -321,9 +340,9 @@ function love.load()
     placeMenu:addItem("Scientist", function() selectedTool = "agent_scientist" end, function() return selectedTool == "agent_scientist" end)
 
     labSphere = LabSphere.new({ baseColor = { 0.35, 0.75, 1.0 }, spinSpeed = 1.2, tilt = 0.4 })
-    dnaField = DNAField.new(40, 22)
     labMenuOpen = false
     labTab = "overview"
+    labSampleIndex = 1
     selectedLab = nil
 
     local worldW = cols * cellSize
@@ -362,7 +381,11 @@ function love.keypressed(key)
         if key == "1" then labTab = "overview" end
         if key == "2" then labTab = "sequencer" end
         if key == "n" and labTab == "overview" then labSphere.showNormals = not labSphere.showNormals end
-        if key == "r" and labTab == "sequencer" then dnaField:generate() end
+        if labTab == "sequencer" then
+            if key == "r" or key == "space" then scanCurrentSample() end
+            if key == "left" then stepSample(-1) end
+            if key == "right" then stepSample(1) end
+        end
         return
     end
 
@@ -388,12 +411,13 @@ function love.mousepressed(x, y, button)
                 closeLabMenu()
                 return
             end
-            local tabs = labTabRects()
-            for name, r in pairs(tabs) do
+            for name, r in pairs(labTabRects()) do
                 if inRect(r, x, y) then labTab = name return end
             end
-            if labTab == "sequencer" and inRect(labRegenRect(), x, y) then
-                dnaField:generate()
+            if labTab == "sequencer" then
+                if inRect(labScanRect(), x, y) then scanCurrentSample() end
+                if inRect(labPrevRect(), x, y) then stepSample(-1) end
+                if inRect(labNextRect(), x, y) then stepSample(1) end
             end
         end
         return
@@ -445,7 +469,7 @@ local function drawLabScreen()
     love.graphics.print("LAB", 24, 24, 0, 2, 2)
     if selectedLab then
         love.graphics.setColor(0.7, 0.85, 1.0)
-        love.graphics.print(string.format("Lab @ (%d,%d)   Research completed: %d", selectedLab.x, selectedLab.y, selectedLab.researchCount or 0), 24, 58)
+        love.graphics.print(string.format("Lab @ (%d,%d)   Research completed: %d   Samples: %d", selectedLab.x, selectedLab.y, selectedLab.researchCount or 0, #selectedLab.samples), 24, 58)
     end
 
     -- tabs
@@ -455,7 +479,7 @@ local function drawLabScreen()
 
     -- tab content
     local contentY = 140
-    local contentH = H - contentY - 50
+    local contentH = H - contentY - 60
 
     if labTab == "overview" then
         local radius = math.floor(math.min(W, contentH) * 0.3)
@@ -463,21 +487,34 @@ local function drawLabScreen()
 
         love.graphics.setColor(0.7, 0.8, 0.9)
         love.graphics.print("Scientists need 1 biomass from a stored chest to work this lab.", 24, contentY)
-        love.graphics.print(string.format("Biomass in storage: %d", resources:get("biomass")), 24, contentY + 22)
+        love.graphics.print("Each biomass used creates its own unique ACTG sample (see Sequencer).", 24, contentY + 22)
+        love.graphics.print(string.format("Biomass in storage: %d", resources:get("biomass")), 24, contentY + 44)
     else
-        local rg = labRegenRect()
-        drawLabButton(rg, "Regenerate (R)", false, inRect(rg, mx, my))
+        local sample = currentSample()
 
-        dnaField:draw(24, contentY, W - 48, contentH)
+        -- sample navigation
+        local pr, nr = labPrevRect(), labNextRect()
+        drawLabButton(pr, "<", false, inRect(pr, mx, my))
+        drawLabButton(nr, ">", false, inRect(nr, mx, my))
+        love.graphics.setColor(1, 1, 1)
+        local total = selectedLab and #selectedLab.samples or 0
+        love.graphics.print(string.format("Sample %d / %d", sample and labSampleIndex or 0, total), 392, 99)
 
-        local c = dnaField:counts()
-        local lx = 24
-        for _, l in ipairs(DNAField.letters) do
-            local col = DNAField.colors[l]
-            love.graphics.setColor(col[1], col[2], col[3])
-            local txt = string.format("%s: %d", l, c[l])
-            love.graphics.print(txt, lx, H - 28)
-            lx = lx + 90
+        if not sample then
+            love.graphics.setColor(0.7, 0.8, 0.9)
+            love.graphics.print("No samples yet. A scientist must bring 1 biomass from storage and work this lab.", 24, contentY + 20)
+        else
+            local sb = labScanRect()
+            drawLabButton(sb, "Scan for TGA / TAG (R)", false, inRect(sb, mx, my))
+
+            sample:draw(24, contentY, W - 48, contentH)
+
+            local s = sample:stats()
+            love.graphics.setColor(0.85, 0.9, 1.0)
+            love.graphics.print(string.format("Scans: %d   Genes intact: %d/%d   TGA found: %d/%d   TAG found: %d/%d   Revealed: %d/%d   Destroyed blocks: %d",
+                sample.presses, s.intact, s.genes, s.starts, s.genes, s.ends, s.genes, s.revealed, s.total, s.destroyed), 24, H - 52)
+            love.graphics.setColor(1.0, 0.85, 0.5)
+            love.graphics.print(sample.lastLog, 24, H - 32)
         end
     end
 
@@ -493,8 +530,8 @@ local function drawLabScreen()
     love.graphics.setLineWidth(1)
 
     -- hints
-    love.graphics.setColor(0.7, 0.8, 0.9)
-    love.graphics.print("1/2: tabs    N: normals (Overview)    R: regenerate (Sequencer)    ESC or X: close", 300, H - 28)
+    love.graphics.setColor(0.6, 0.7, 0.8)
+    love.graphics.print("1/2: tabs   N: normals   R/Space: scan   Left/Right: sample   ESC or X: close", W - 520, H - 22)
 end
 
 function love.draw()
@@ -556,6 +593,8 @@ function love.draw()
             local total = item.capacity or 1
             local used = item.amount or 0
             love.graphics.print(string.format("Box:%d%%", math.floor((used / total) * 100)), px, py)
+        elseif item.kind == "lab" then
+            love.graphics.print(string.format("lab (%d)", #item.samples), px, py)
         else
             love.graphics.print(item.kind, px, py)
         end
