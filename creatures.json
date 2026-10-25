@@ -1,0 +1,21 @@
+{
+  "trait_strength_thresholds": { "none": 0, "weak": 1, "moderate": 2, "severe": 3 },
+  "clusters": {
+    "blood": { "name": "Hemophagy", "prefix": "HEM", "trait": "Blood dependence", "gene_count": 6 },
+    "light": { "name": "Photosensitivity", "prefix": "PHO", "trait": "Light sensitivity", "gene_count": 5 },
+    "decay": { "name": "Necrosis", "prefix": "NEC", "trait": "Tissue decay", "gene_count": 4 },
+    "lunar": { "name": "Lunar Cycle", "prefix": "LUN", "trait": "Lunar transformation", "gene_count": 5 },
+    "ooze": { "name": "Mucoid", "prefix": "MUC", "trait": "Slime secretion", "gene_count": 4 },
+    "flora": { "name": "Chlorophyll", "prefix": "CHL", "trait": "Plant growth", "gene_count": 7 }
+  },
+  "creatures": [
+    { "id": "vampire", "name": "Vampire", "description": "Nocturnal predator that feeds on blood.", "tolerance": "low", "profile": { "blood": { "level": 3, "weight": 1.0, "core": true }, "light": { "level": 2, "weight": 0.6, "core": false } }, "forbidden": ["flora"], "is_fallback": false },
+    { "id": "slug", "name": "Slug", "description": "Slow, slimy crawler.", "tolerance": "high", "profile": { "ooze": { "level": 3, "weight": 1.0, "core": true } }, "forbidden": ["blood"], "is_fallback": false },
+    { "id": "werewolf", "name": "Werewolf", "description": "Shapeshifter bound to the moon.", "tolerance": "medium", "profile": { "lunar": { "level": 3, "weight": 1.0, "core": true }, "blood": { "level": 1, "weight": 0.3, "core": false } }, "forbidden": ["ooze"], "is_fallback": false },
+    { "id": "ghoul", "name": "Ghoul", "description": "Scavenger of the dead.", "tolerance": "medium", "profile": { "decay": { "level": 3, "weight": 1.0, "core": true } }, "forbidden": ["flora"], "is_fallback": false },
+    { "id": "wisp", "name": "Wisp", "description": "Drifting spark of light.", "tolerance": "low", "profile": { "light": { "level": 3, "weight": 1.0, "core": true } }, "forbidden": ["decay"], "is_fallback": false },
+    { "id": "burrower", "name": "Burrower", "description": "Tunnelling creature of the deep.", "tolerance": "high", "profile": { "decay": { "level": 1, "weight": 0.4, "core": false }, "ooze": { "level": 2, "weight": 0.7, "core": true } }, "forbidden": ["light"], "is_fallback": false },
+    { "id": "bloom", "name": "Bloom", "description": "Walking plant colony.", "tolerance": "medium", "profile": { "flora": { "level": 3, "weight": 1.0, "core": true } }, "forbidden": ["decay"], "is_fallback": false },
+    { "id": "mutant", "name": "Mutant", "description": "Unstable result when no other profile matches.", "tolerance": "any", "profile": {}, "forbidden": [], "is_fallback": true }
+  ]
+}

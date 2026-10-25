@@ -5,6 +5,7 @@ local Camera = require("camera")
 local Resources = require("resources")
 local AssetManager = require("asset_manager")
 local LabSphere = require("lab_sphere")
+local json = require("json")
 
 local kindImageKeys = { mine = "resource", box = "box", lab = "lab", gene_bank = "box" }
 
@@ -130,13 +131,77 @@ function AgentListMenu:new(x, y, w)
     return m
 end
 
-local toolItems = {
-    { name = "resource", label = "Resource" },
-    { name = "box", label = "Box" },
-    { name = "lab", label = "Lab" },
-    { name = "gene_bank", label = "Gene Bank" },
-    { name = "erase", label = "Erase" },
+local TOP_BAR_H = 40
+local PANEL_Y = 44
+
+local buyItems = {
+    assets = {
+        { name = "resource", label = "Resource Node" },
+        { name = "box", label = "Storage Box" },
+        { name = "lab", label = "Lab" },
+        { name = "gene_bank", label = "Gene Bank" },
+    },
+    workers = {
+        { name = "agent_miner", label = "Miner" },
+        { name = "agent_scientist", label = "Scientist" },
+    },
 }
+
+local toolLabels = { erase = "Erase" }
+for _, list in pairs(buyItems) do
+    for _, item in ipairs(list) do toolLabels[item.name] = item.label end
+end
+
+local buyRect = { x = 10, y = PANEL_Y, w = 260, h = 190 }
+local appendixRect = { x = 10, y = PANEL_Y, w = 720, h = 480 }
+
+local function buyTabRects()
+    return {
+        assets = { x = buyRect.x + 10, y = buyRect.y + 10, w = 115, h = 26 },
+        workers = { x = buyRect.x + 135, y = buyRect.y + 10, w = 115, h = 26 },
+    }
+end
+
+local function buyItemRect(i)
+    return { x = buyRect.x + 10, y = buyRect.y + 46 + (i - 1) * 34, w = buyRect.w - 20, h = 28 }
+end
+
+local function appendixListRect(i)
+    return { x = appendixRect.x + 10, y = appendixRect.y + 40 + (i - 1) * 28, w = 170, h = 24 }
+end
+
+local function closePanels()
+    buyOpen = false
+    agentMenu.visible = false
+    appendixOpen = false
+end
+
+local function loadCreatureData()
+    local ok, data = pcall(function()
+        local contents = love.filesystem.read("creatures.json")
+        return json.decode(contents)
+    end)
+    if ok and type(data) == "table" then return data end
+    return { creatures = {}, clusters = {}, trait_strength_thresholds = {} }
+end
+
+local function strengthLabel(level)
+    local best, bestVal = nil, nil
+    for name, threshold in pairs(creatureData.trait_strength_thresholds or {}) do
+        if type(threshold) == "number" and type(level) == "number" and level >= threshold
+            and (bestVal == nil or threshold > bestVal) then
+            best, bestVal = name, threshold
+        end
+    end
+    return best
+end
+
+local function sortedKeys(t)
+    local keys = {}
+    for k in pairs(t or {}) do keys[#keys + 1] = k end
+    table.sort(keys)
+    return keys
+end
 
 local function isAgentTool(tool)
     return tool == "agent_miner" or tool == "agent_scientist"
@@ -265,30 +330,49 @@ local function hitLabAtCell(cx, cy)
     return nil
 end
 
+local topButtons = {}
+
 local function handleUI(x, y, onPress)
-    if agentButton:contains(x, y) then
-        if onPress then agentButton.onClick() end
+    -- 1. top bar
+    if y <= TOP_BAR_H then
+        if onPress then
+            for _, b in ipairs(topButtons) do
+                if b:contains(x, y) then b.onClick() break end
+            end
+        end
         return true
     end
 
-    if placeButton:contains(x, y) then
-        if onPress then placeButton.onClick() end
+    -- 2. buy panel
+    if buyOpen and inRect(buyRect, x, y) then
+        if onPress then
+            for name, r in pairs(buyTabRects()) do
+                if inRect(r, x, y) then buyTab = name return true end
+            end
+            for i, item in ipairs(buyItems[buyTab]) do
+                if inRect(buyItemRect(i), x, y) then
+                    selectedTool = item.name
+                    buyOpen = false
+                    return true
+                end
+            end
+        end
         return true
     end
 
+    -- 3. agent menu
     if agentMenu.visible and agentMenu:contains(x, y) then
         if onPress then agentMenu:click(x, y) end
         return true
     end
 
-    if placeMenu.visible and placeMenu:contains(x, y) then
-        if onPress then placeMenu:click(x, y) end
-        return true
-    end
-
-    if x >= menuRect.x and x <= menuRect.x + menuRect.w and y >= menuRect.y and y <= menuRect.y + menuRect.h then
-        local idx = math.floor((y - menuRect.y) / 30) + 1
-        if toolItems[idx] then selectedTool = toolItems[idx].name end
+    -- 4. appendix menu
+    if appendixOpen and inRect(appendixRect, x, y) then
+        if onPress then
+            for i in ipairs(creatureData.creatures or {}) do
+                if inRect(appendixListRect(i), x, y) then selectedCreature = i return true end
+            end
+        end
         return true
     end
 
@@ -325,22 +409,34 @@ function love.load()
     spawnAgent(14, 19, "scientist")
 
     selectedTool = "resource"
-    menuRect = { x = 10, y = 10, w = 150, h = #toolItems * 30 }
+    buyOpen = false
+    buyTab = "assets"
+    appendixOpen = false
+    selectedCreature = 1
+    creatureData = loadCreatureData()
 
-    agentButton = UIButton:new(10, 140, 160, 28, "Agents", function()
-        agentMenu.visible = not agentMenu.visible
-    end)
-
-    placeButton = UIButton:new(10, 175, 160, 28, "Place Agent", function()
-        placeMenu.visible = not placeMenu.visible
-    end)
-
-    agentMenu = AgentListMenu:new(190, 140, 460)
+    agentMenu = AgentListMenu:new(10, PANEL_Y, 460)
     agentMenu:refresh(agents)
 
-    placeMenu = Menu:new(190, 175, 200, 70)
-    placeMenu:addItem("Miner", function() selectedTool = "agent_miner" end, function() return selectedTool == "agent_miner" end)
-    placeMenu:addItem("Scientist", function() selectedTool = "agent_scientist" end, function() return selectedTool == "agent_scientist" end)
+    local function toggle(which)
+        local wasOpen = (which == "buy" and buyOpen) or (which == "agents" and agentMenu.visible)
+            or (which == "appendix" and appendixOpen)
+        closePanels()
+        if not wasOpen then
+            if which == "buy" then buyOpen = true
+            elseif which == "agents" then agentMenu.visible = true
+            else appendixOpen = true end
+        end
+    end
+
+    topButtons = {
+        UIButton:new(10, 4, 80, 32, "Buy", function() toggle("buy") end),
+        UIButton:new(100, 4, 80, 32, "Agents", function() toggle("agents") end),
+        UIButton:new(190, 4, 80, 32, "Erase", function()
+            selectedTool = (selectedTool == "erase") and "resource" or "erase"
+        end),
+        UIButton:new(280, 4, 90, 32, "Appendix", function() toggle("appendix") end),
+    }
 
     labSphere = LabSphere.new({ baseColor = { 0.35, 0.75, 1.0 }, spinSpeed = 1.2, tilt = 0.4 })
     labMenuOpen = false
@@ -634,26 +730,100 @@ function love.draw()
 
     camera:detach()
 
-    love.graphics.setColor(0.12, 0.12, 0.18, 0.9)
-    love.graphics.rectangle("fill", menuRect.x, menuRect.y, menuRect.w, menuRect.h)
-
-    for i, item in ipairs(toolItems) do
-        local y = menuRect.y + (i - 1) * 30
-        local selected = selectedTool == item.name
-        love.graphics.setColor(selected and 0.35 or 0.2, selected and 0.9 or 0.5, selected and 0.35 or 0.6)
-        love.graphics.rectangle("fill", menuRect.x + 5, y + 5, menuRect.w - 10, 20)
+    local W = love.graphics.getWidth()
+    love.graphics.setColor(0.1, 0.1, 0.14, 0.95)
+    love.graphics.rectangle("fill", 0, 0, W, TOP_BAR_H)
+    topButtons[1].selected = buyOpen
+    topButtons[2].selected = agentMenu.visible
+    topButtons[3].selected = selectedTool == "erase"
+    topButtons[4].selected = appendixOpen
+    for _, b in ipairs(topButtons) do b:draw() end
+    if selectedTool == "erase" then
+        love.graphics.setColor(1, 0.3, 0.3)
+        love.graphics.rectangle("line", 190, 4, 80, 32)
+        love.graphics.print("ERASE MODE", 380, 13)
+    else
         love.graphics.setColor(1, 1, 1)
-        love.graphics.print(item.label, menuRect.x + 15, y + 8)
+        love.graphics.print("Selected: " .. (toolLabels[selectedTool] or tostring(selectedTool)), 380, 13)
+    end
+    love.graphics.setColor(1, 1, 1)
+    love.graphics.print("Pan: WASD/Arrows, edge scroll, or middle mouse drag | Left-click: Place / open Lab", 560, 13)
+
+    if buyOpen then
+        love.graphics.setColor(0.12, 0.12, 0.15, 0.95)
+        love.graphics.rectangle("fill", buyRect.x, buyRect.y, buyRect.w, buyRect.h)
+        for name, r in pairs(buyTabRects()) do
+            love.graphics.setColor(buyTab == name and 0.3 or 0.22, buyTab == name and 0.75 or 0.22, buyTab == name and 0.95 or 0.28)
+            love.graphics.rectangle("fill", r.x, r.y, r.w, r.h)
+            love.graphics.setColor(1, 1, 1)
+            love.graphics.print(name == "assets" and "Assets" or "Workers", r.x + 10, r.y + 6)
+        end
+        for i, item in ipairs(buyItems[buyTab]) do
+            local r = buyItemRect(i)
+            local sel = selectedTool == item.name
+            love.graphics.setColor(sel and 0.35 or 0.2, sel and 0.9 or 0.5, sel and 0.35 or 0.6)
+            love.graphics.rectangle("fill", r.x, r.y, r.w, r.h)
+            love.graphics.setColor(1, 1, 1)
+            love.graphics.print(item.label, r.x + 10, r.y + 8)
+        end
     end
 
-    agentButton:draw()
-    placeButton.selected = isAgentTool(selectedTool)
-    placeButton:draw()
     agentMenu:draw()
-    placeMenu:draw()
 
-    resources:draw(10, 215)
+    if appendixOpen then
+        local R = appendixRect
+        love.graphics.setColor(0.12, 0.12, 0.15, 0.97)
+        love.graphics.rectangle("fill", R.x, R.y, R.w, R.h)
+        love.graphics.setColor(1, 1, 1)
+        love.graphics.print("Creature Appendix", R.x + 10, R.y + 10)
+        local creatures = creatureData.creatures or {}
+        for i, c in ipairs(creatures) do
+            local r = appendixListRect(i)
+            love.graphics.setColor(i == selectedCreature and 0.3 or 0.22, i == selectedCreature and 0.75 or 0.22, i == selectedCreature and 0.95 or 0.28)
+            love.graphics.rectangle("fill", r.x, r.y, r.w, r.h)
+            love.graphics.setColor(1, 1, 1)
+            love.graphics.print(c.name or c.id or "?", r.x + 8, r.y + 5)
+        end
+        local c = creatures[selectedCreature]
+        local dx, dy = R.x + 200, R.y + 40
+        local function line(text, color)
+            love.graphics.setColor(color or { 1, 1, 1 })
+            love.graphics.printf(text, dx, dy, R.w - 215)
+            local _, wrapped = love.graphics.getFont():getWrap(text, R.w - 215)
+            dy = dy + 16 * math.max(1, #wrapped)
+        end
+        if c then
+            line(string.format("%s (%s)", c.name or "?", c.id or "?"), { 1, 0.9, 0.4 })
+            if c.is_fallback then line("Fallback creature", { 1, 0.6, 0.3 }) end
+            line("Description: " .. (c.description or ""))
+            line("Tolerance: " .. tostring(c.tolerance or "-"))
+            dy = dy + 6
+            line("Profile:", { 0.5, 0.9, 1 })
+            local keys = sortedKeys(c.profile)
+            if #keys == 0 then line("  (none)", { 0.7, 0.7, 0.7 }) end
+            for _, key in ipairs(keys) do
+                local p = c.profile[key]
+                local cl = (creatureData.clusters or {})[key]
+                local text = string.format("  %s: level %s", key, tostring(p.level))
+                local strength = strengthLabel(p.level)
+                if strength then text = text .. " (" .. strength .. ")" end
+                text = text .. string.format(", weight %s%s", tostring(p.weight), p.core and ", core" or "")
+                if cl then
+                    text = text .. string.format(" - %s [%s] trait: %s, genes: %s",
+                        tostring(cl.name or key), tostring(cl.prefix or "?"), tostring(cl.trait or "?"), tostring(cl.gene_count or "?"))
+                end
+                line(text)
+            end
+            dy = dy + 6
+            line("Forbidden:", { 1, 0.5, 0.5 })
+            local forbidden = c.forbidden or {}
+            if #forbidden == 0 then line("  (none)", { 0.7, 0.7, 0.7 }) end
+            for _, key in ipairs(forbidden) do
+                local cl = (creatureData.clusters or {})[key]
+                line("  " .. key .. (cl and cl.name and (" - " .. cl.name) or ""))
+            end
+        end
+    end
 
-    love.graphics.setColor(1, 1, 1)
-    love.graphics.print("Pan: WASD/Arrows, edge scroll, or middle mouse drag | Left-click: Place / open Lab menu", 180, 10)
+    resources:draw(W - 200, 50)
 end
